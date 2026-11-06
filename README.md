@@ -80,6 +80,9 @@ including across application restarts. Select **Check for Updates…** in the me
 or Settings to check immediately. A newer version produces a notification with
 a **Download** button that opens its GitHub download.
 
+Outbound firewalls such as LuLu must allow AimDrop to reach `api.github.com`
+for update checks.
+
 Transfers stay local. Update checks contact GitHub; files are never uploaded to
 GitHub or relayed through a cloud service.
 
