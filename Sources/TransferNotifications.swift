@@ -9,27 +9,37 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
     private let openAction = "OPEN_FILES"
     private let pendingCategory = "AIRFRAJER_BUFFERED"
     private let saveAction = "SAVE_BUFFERED"
+    private let updateCategory = "AIMDROP_UPDATE_AVAILABLE"
+    private let downloadAction = "DOWNLOAD_UPDATE"
     private var deliveries: [String: Delivery] = [:]
     private var order: [String] = []
     private var delivering = false
     var log: ((String) -> Void)?
     var onSavePending: ((String) -> Void)?
+    var onOpenUpdate: ((URL) -> Void)?
 
     private struct Delivery {
         let content: UNMutableNotificationContent?  // nil removes a destination reminder
+        let completion: ((Bool) -> Void)?
     }
 
     func start() {
         center.delegate = self
+        refreshCategories()
+        requestPermission()
+    }
+
+    func refreshCategories() {
         // Keep actions for completion notifications delivered by older builds.
-        let reveal = UNNotificationAction(identifier: revealAction, title: "Pokaż w Finderze", options: [.foreground])
-        let open = UNNotificationAction(identifier: openAction, title: "Otwórz", options: [.foreground])
-        let save = UNNotificationAction(identifier: saveAction, title: "Wybierz folder", options: [.foreground])
+        let reveal = UNNotificationAction(identifier: revealAction, title: L10n.text("Show in Finder", "Pokaż w Finderze"), options: [.foreground])
+        let open = UNNotificationAction(identifier: openAction, title: L10n.text("Open", "Otwórz"), options: [.foreground])
+        let save = UNNotificationAction(identifier: saveAction, title: L10n.text("Choose folder", "Wybierz folder"), options: [.foreground])
+        let download = UNNotificationAction(identifier: downloadAction, title: L10n.text("Download", "Pobierz"), options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: category, actions: [reveal, open], intentIdentifiers: [], options: []),
-            UNNotificationCategory(identifier: pendingCategory, actions: [save], intentIdentifiers: [], options: [])
+            UNNotificationCategory(identifier: pendingCategory, actions: [save], intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: updateCategory, actions: [download], intentIdentifiers: [], options: [])
         ])
-        requestPermission()
     }
 
     private func requestPermission() {
@@ -55,8 +65,8 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
             let content = UNMutableNotificationContent()
             // macOS owns the compact banner layout and overlays its action on
             // the right. Keep both lines short; the button supplies the prompt.
-            content.title = "Pliki odebrane"
-            content.body = "\(TransferSummary.noun(count, "plik", "pliki", "plików")) do zapisania."
+            content.title = L10n.text("Files received", "Pliki odebrane")
+            content.body = L10n.format("%@ to save.", "%@ do zapisania.", TransferSummary.files(count))
             content.categoryIdentifier = self.pendingCategory
             content.threadIdentifier = "airfrajer.transfers"
             content.userInfo = ["pendingID": id]
@@ -64,11 +74,29 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    func updateAvailable(version: String, url: URL, completion: @escaping (Bool) -> Void) {
+        guard Self.isUpdateURL(url) else { completion(false); return }
+        queue.async {
+            let content = UNMutableNotificationContent()
+            content.title = L10n.format("AimDrop %@", "AimDrop %@", version)
+            content.body = L10n.text("Update available.", "Dostępna aktualizacja.")
+            content.categoryIdentifier = self.updateCategory
+            content.userInfo = ["updateURL": url.absoluteString]
+            self.enqueue(id: "aimdrop.update.available", content: content, completion: completion)
+        }
+    }
+
+    private static func isUpdateURL(_ url: URL) -> Bool {
+        url.scheme == "https" && url.host == "github.com" && url.user == nil && url.password == nil
+            && url.port == nil && url.path.hasPrefix("/emiterkamieni/AimDrop/releases/")
+    }
+
     // Serialize add/remove acknowledgements so a late destination reminder
     // cannot survive a successful save.
-    private func enqueue(id: String, content: UNMutableNotificationContent?) {
+    private func enqueue(id: String, content: UNMutableNotificationContent?, completion: ((Bool) -> Void)? = nil) {
         if deliveries[id] == nil { order.append(id) }
-        deliveries[id] = Delivery(content: content)
+        if let replaced = deliveries[id]?.completion { DispatchQueue.main.async { replaced(false) } }
+        deliveries[id] = Delivery(content: content, completion: completion)
         deliverNext()
     }
 
@@ -89,8 +117,10 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
                 if let error = error {
                     self.log?("Notification delivery failed: \(error.localizedDescription)")
                 } else {
-                    self.log?("Notification accepted by macOS: \(content.categoryIdentifier == self.pendingCategory ? "destination" : "completion")")
+                    let kind = content.categoryIdentifier == self.pendingCategory ? "destination" : (content.categoryIdentifier == self.updateCategory ? "update" : "completion")
+                    self.log?("Notification accepted by macOS: \(kind)")
                 }
+                if let completion = delivery.completion { DispatchQueue.main.async { completion(error == nil) } }
                 self.delivering = false
                 self.deliverNext()
             }
@@ -107,6 +137,13 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
         let info = response.notification.request.content.userInfo
         DispatchQueue.main.async {
             defer { completionHandler() }
+            if response.notification.request.content.categoryIdentifier == self.updateCategory {
+                if response.actionIdentifier == self.downloadAction || response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+                   let value = info["updateURL"] as? String, let url = URL(string: value), Self.isUpdateURL(url) {
+                    self.onOpenUpdate?(url)
+                }
+                return
+            }
             if let id = info["pendingID"] as? String,
                response.actionIdentifier == self.saveAction || response.actionIdentifier == UNNotificationDefaultActionIdentifier {
                 self.onSavePending?(id)

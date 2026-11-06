@@ -9,6 +9,7 @@ import uuid
 
 from .archive import ReceiveDirectory
 from .layout import selections
+from .localization import message
 
 
 class Refused(Exception):
@@ -21,7 +22,7 @@ def transfer_id(value):
     try:
         return str(uuid.UUID(value))
     except (ValueError, TypeError, AttributeError) as error:
-        raise Refused("Brak poprawnego identyfikatora przesyłki.") from error
+        raise Refused(message("A valid transfer identifier is missing.", "Brak poprawnego identyfikatora przesyłki.")) from error
 
 
 def peer_key(address):
@@ -70,9 +71,9 @@ class Sessions:
         ident = transfer_id(request.get("TransferID"))
         files = request.get("Files")
         if not isinstance(files, list) or not files or len(files) > 10000:
-            raise Refused("Prototyp obsługuje przesyłanie plików, nie linków ani innych rzeczy.")
+            raise Refused(message("Only file transfers are supported, not links or other items.", "Obsługiwane jest przesyłanie plików, nie linków ani innych rzeczy."))
         if any(not isinstance(item, dict) or not isinstance(item.get("FileName"), str) for item in files):
-            raise Refused("Nieprawidłowa lista plików.")
+            raise Refused(message("Invalid file list.", "Nieprawidłowa lista plików."))
         names = tuple(display_text(item["FileName"]) for item in files)
         try:
             selected = selections(files)
@@ -82,15 +83,15 @@ class Sessions:
         with self.lock:
             self.expire()
             if self.paused or self.stopped:
-                raise Refused("Odbieranie jest wstrzymane.")
+                raise Refused(message("Receiving is paused.", "Odbieranie jest wstrzymane."))
             if (ident, key) in self.recent:
-                raise Refused("Ta przesyłka została już zakończona lub odrzucona.")
+                raise Refused(message("This transfer has already finished or been declined.", "Ta przesyłka została już zakończona lub odrzucona."))
             if self.current:
                 existing = self.current
                 if (existing.transfer == ident and existing.peer == key
                         and existing.selection == selected and existing.state in ("waiting", "accepted")):
                     return existing
-                raise Refused("Inna przesyłka jest już obsługiwana.")
+                raise Refused(message("Another transfer is already being handled.", "Inna przesyłka jest już obsługiwana."))
             offer = Offer(ident, key, display_text(request.get("SenderComputerName", "iPhone")), names,
                           selection=selected,
                           folders=tuple(display_text(item.name) for item in selected if item.is_directory))
@@ -109,7 +110,7 @@ class Sessions:
                 destination = self.prepare_destination(offer.id)
                 accepted = self.decide(offer.id, True, destination)
                 if not accepted:
-                    raise Refused("Nie można przygotować bufora odbioru.")
+                    raise Refused(message("Cannot prepare the receive buffer.", "Nie można przygotować bufora odbioru."))
             except Exception as error:
                 with self.lock:
                     canceled = offer.canceled.is_set()
@@ -118,8 +119,8 @@ class Sessions:
                     elif self.abandon_destination:
                         self.abandon_destination(offer.id)
                 if not canceled:
-                    self.emit("error", id=offer.id, message="Nie można przygotować bufora odbioru: %s" % error)
-                raise Refused("Bufor odbioru jest niedostępny.") from error
+                    self.emit("error", id=offer.id, message=str(message("Cannot prepare the receive buffer: %s", "Nie można przygotować bufora odbioru: %s", error)))
+                raise Refused(message("The receive buffer is unavailable.", "Bufor odbioru jest niedostępny.")) from error
         return offer
 
     def wait(self, offer):
@@ -129,7 +130,7 @@ class Sessions:
                 self._close(offer, "timeout")
             if (offer.state not in ("accepted", "receiving", "finished")
                     or (offer.state != "finished" and self.current is not offer)):
-                raise Refused("Przesyłka nie została zaakceptowana.")
+                raise Refused(message("The transfer was not accepted.", "Przesyłka nie została zaakceptowana."))
             return offer
 
     def decide(self, ident, accepted, directory=None):
@@ -142,21 +143,21 @@ class Sessions:
                 return False
             try:
                 if not isinstance(directory, str) or not Path(directory).is_absolute():
-                    raise ValueError("Wybierz pełną ścieżkę folderu.")
+                    raise ValueError(message("Choose an absolute folder path.", "Wybierz pełną ścieżkę folderu."))
                 destination = Path(directory).resolve(strict=True)
                 if not destination.is_dir():
-                    raise ValueError("Wybrane miejsce nie jest folderem.")
+                    raise ValueError(message("The selected location is not a folder.", "Wybrane miejsce nie jest folderem."))
                 offer.storage = ReceiveDirectory(destination)
             except (OSError, ValueError, RuntimeError) as error:
                 self._close(offer, "invalid_destination")
-                self.emit("error", message="Nie można użyć wybranego folderu: %s" % error)
+                self.emit("error", message=str(message("Cannot use the selected folder: %s", "Nie można użyć wybranego folderu: %s", error)))
                 return False
             offer.directory = str(destination)
             offer.state = "accepted"
             offer.deadline = time.monotonic() + self.upload_timeout
             offer.decision.set()
-            message = "Receive buffer prepared" if self.prepare_destination else "Destination selected"
-            logging.getLogger(__name__).info("%s; transfer accepted, awaiting payload", message)
+            log_message = "Receive buffer prepared" if self.prepare_destination else "Destination selected"
+            logging.getLogger(__name__).info("%s; transfer accepted, awaiting payload", log_message)
             self.emit("accepted", id=offer.id)
             return True
 
@@ -167,7 +168,7 @@ class Sessions:
             offer = self.current
             if (self.paused or self.stopped or not offer or offer.state != "accepted"
                     or offer.transfer != ident or offer.peer != peer_key(address)):
-                raise Refused("Transfer nie ma ważnej zgody na odbiór.")
+                raise Refused(message("The transfer has no valid receive consent.", "Transfer nie ma ważnej zgody na odbiór."))
             offer.state = "receiving"
             return offer
 

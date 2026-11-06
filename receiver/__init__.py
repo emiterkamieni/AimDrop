@@ -1,1 +1,1 @@
-"""AirFolder's experimental AirDrop receiver."""
+"""AimDrop's experimental AirDrop receiver."""

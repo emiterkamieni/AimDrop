@@ -1,12 +1,33 @@
 import Cocoa
 import UniformTypeIdentifiers
+import ServiceManagement
 
 final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private let nameField = NSTextField(string: "")
     private let saveMode = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let languageMenu = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let languageChoices = AppLanguage.allCases
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let nameHint = NSTextField(wrappingLabelWithString: "")
+    private let saveLabel = NSTextField(labelWithString: "")
+    private let folderHint = NSTextField(wrappingLabelWithString: "")
+    private let languageLabel = NSTextField(labelWithString: "")
+    private let updatesHint = NSTextField(wrappingLabelWithString: "")
+    private let versionLabel = NSTextField(labelWithString: "")
+    private let updatesButton = NSButton(title: "", target: nil, action: nil)
+    private let closeButton = NSButton(title: "", target: nil, action: nil)
+    private var checkingForUpdates = false
+    private var contentStack: NSStackView?
+    private var footerStack: NSStackView?
     private let folderLabel = NSTextField(labelWithString: "Nie wybrano folderu")
     private let chooseButton = NSButton(title: "Wybierz…", target: nil, action: nil)
     private let soundButton = NSButton(checkboxWithTitle: "Dźwięk po zapisaniu plików", target: nil, action: nil)
+    private let loginItemButton = NSButton(checkboxWithTitle: "Uruchamiaj przy logowaniu", target: nil, action: nil)
+    private let loginItemSettingsButton = NSButton(title: "Ustawienia macOS…", target: nil, action: nil)
+    private let loginItemStatus = NSTextField(wrappingLabelWithString: "")
+    private let loginItems: LoginItemManager
+    private var loginItemDraft: Bool?
+    private var loginItemError: Error?
     private let feedback = NSTextField(wrappingLabelWithString: "")
     private let saveButton = NSButton(title: "Zapisz", target: nil, action: nil)
     private var destination: SaveDestination?
@@ -22,16 +43,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     var onSave: ((AppPreferences) -> Bool)?
     var canChooseFile: (() -> Bool)?
     var onPickerClosed: (() -> Void)?
+    var onCheckForUpdates: (() -> Void)?
 
-    init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+    init(loginItems: LoginItemManager = .system) {
+        self.loginItems = loginItems
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init(window: window)
-        window.title = "Ustawienia AirFolder"
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.center()
         buildContent()
+        window.center()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -39,6 +61,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private func buildContent() {
         guard let content = window?.contentView else { return }
         let stack = NSStackView()
+        contentStack = stack
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -50,48 +73,43 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24)
         ])
 
-        let heading = NSTextField(labelWithString: "Odbieranie przez AirDrop")
-        heading.font = .systemFont(ofSize: 21, weight: .semibold)
-        stack.addArrangedSubview(heading)
-        stack.setCustomSpacing(22, after: heading)
-
         avatarButton.target = self; avatarButton.action = #selector(chooseAvatar)
         resetAvatarButton.target = self; resetAvatarButton.action = #selector(resetAvatar)
         avatarButton.bezelStyle = .rounded; resetAvatarButton.bezelStyle = .rounded
         avatarPreview.setAccessibilityElement(true)
         avatarPreview.setAccessibilityRole(.image)
-        avatarPreview.setAccessibilityLabel("Awatar widoczny na iPhonie")
         avatarPreview.identifier = NSUserInterfaceItemIdentifier("avatarPreview")
         let avatarButtons = NSStackView(views: [avatarButton, resetAvatarButton]); avatarButtons.spacing = 8
-        let avatarText = NSStackView(views: [label("Awatar w AirDrop"), hint("Tak będzie wyglądać odbiornik na iPhonie."), avatarButtons])
+        for button in [avatarButton, resetAvatarButton] {
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 12)
+        }
+        nameLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        nameLabel.textColor = .secondaryLabelColor
+        nameField.placeholderString = "AimDrop"
+        nameField.delegate = self
+        nameField.font = .systemFont(ofSize: 17, weight: .medium)
+        nameField.identifier = NSUserInterfaceItemIdentifier("receiverName")
+        let avatarText = NSStackView(views: [nameLabel, nameField, avatarButtons])
         avatarText.orientation = .vertical; avatarText.alignment = .leading; avatarText.spacing = 8
         let avatarRow = NSStackView(views: [avatarPreview, avatarText]); avatarRow.spacing = 20; avatarRow.alignment = .centerY
         stack.addArrangedSubview(avatarRow)
+        avatarRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        avatarText.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -108).isActive = true
+        nameField.widthAnchor.constraint(equalTo: avatarText.widthAnchor).isActive = true
         avatarPreview.widthAnchor.constraint(equalToConstant: 88).isActive = true
         avatarPreview.heightAnchor.constraint(equalToConstant: 88).isActive = true
-        stack.setCustomSpacing(20, after: avatarRow)
-
-        let nameLabel = label("Nazwa widoczna w AirDrop")
-        stack.addArrangedSubview(nameLabel)
-        stack.setCustomSpacing(6, after: nameLabel)
-        nameField.placeholderString = "AirFolder"
-        nameField.delegate = self
-        nameField.setAccessibilityLabel("Nazwa widoczna w AirDrop")
-        nameField.identifier = NSUserInterfaceItemIdentifier("receiverName")
-        stack.addArrangedSubview(nameField)
-        nameField.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        let nameHint = hint("Zmiana nazwy lub awatara wymaga nowego PIN-u. Po sparowaniu otwórz ponownie AirDrop na iPhonie, aby odświeżyć obraz. Restart aplikacji zachowuje parowanie.")
+        stack.setCustomSpacing(10, after: avatarRow)
+        styleHint(nameHint)
         stack.addArrangedSubview(nameHint)
         nameHint.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        stack.setCustomSpacing(20, after: nameHint)
+        addDivider(to: stack)
 
-        let saveLabel = label("Zapisywanie nowych plików")
+        saveLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         stack.addArrangedSubview(saveLabel)
         stack.setCustomSpacing(6, after: saveLabel)
-        saveMode.addItems(withTitles: ["Pytaj o folder po każdym odbiorze", "Automatycznie do wybranego folderu"])
         saveMode.target = self
         saveMode.action = #selector(modeChanged)
-        saveMode.setAccessibilityLabel("Sposób zapisywania plików")
         stack.addArrangedSubview(saveMode)
         saveMode.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
@@ -109,54 +127,168 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         chooseButton.setContentHuggingPriority(.required, for: .horizontal)
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        let folderHint = hint("Pliki oczekujące na zapis pozostają do ręcznego zapisania.")
+        styleHint(folderHint)
         stack.addArrangedSubview(folderHint)
-        stack.setCustomSpacing(18, after: folderHint)
+        folderHint.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         soundButton.target = self
         soundButton.action = #selector(changed)
         stack.addArrangedSubview(soundButton)
+        addDivider(to: stack)
+
+        languageLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        languageMenu.target = self
+        languageMenu.action = #selector(changed)
+        languageMenu.identifier = NSUserInterfaceItemIdentifier("appLanguage")
+        let languageRow = NSStackView(views: [languageLabel, languageMenu])
+        languageRow.spacing = 20
+        languageRow.alignment = .centerY
+        stack.addArrangedSubview(languageRow)
+        languageRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        languageLabel.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        languageMenu.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -120).isActive = true
+        languageMenu.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        loginItemButton.target = self
+        loginItemButton.action = #selector(loginItemChanged)
+        loginItemButton.identifier = NSUserInterfaceItemIdentifier("launchAtLogin")
+        loginItemSettingsButton.target = self
+        loginItemSettingsButton.action = #selector(openLoginItemSettings)
+        loginItemSettingsButton.bezelStyle = .rounded
+        loginItemSettingsButton.controlSize = .small
+        loginItemSettingsButton.font = .systemFont(ofSize: 11)
+        loginItemSettingsButton.isHidden = true
+        let loginRow = NSStackView(views: [loginItemButton, loginItemSettingsButton])
+        loginRow.spacing = 16
+        loginRow.alignment = .centerY
+        stack.addArrangedSubview(loginRow)
+        stack.setCustomSpacing(6, after: loginRow)
+        loginItemStatus.font = .systemFont(ofSize: 11)
+        loginItemStatus.maximumNumberOfLines = 3
+        loginItemStatus.lineBreakMode = .byTruncatingTail
+        loginItemStatus.identifier = NSUserInterfaceItemIdentifier("loginItemStatus")
+        stack.addArrangedSubview(loginItemStatus)
+        loginItemStatus.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        versionLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        versionLabel.textColor = .secondaryLabelColor
+        updatesButton.target = self
+        updatesButton.action = #selector(checkForUpdates)
+        updatesButton.identifier = NSUserInterfaceItemIdentifier("checkForUpdates")
+        updatesButton.bezelStyle = .rounded
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let updateRow = NSStackView(views: [versionLabel, spacer, updatesButton])
+        updateRow.alignment = .centerY
+        stack.addArrangedSubview(updateRow)
+        updateRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.setCustomSpacing(4, after: updateRow)
+        styleHint(updatesHint)
+        stack.addArrangedSubview(updatesHint)
+        updatesHint.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         feedback.font = .systemFont(ofSize: 11)
         feedback.textColor = .secondaryLabelColor
+        feedback.maximumNumberOfLines = 3
+        feedback.lineBreakMode = .byTruncatingTail
         feedback.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(feedback)
-        let close = NSButton(title: "Zamknij", target: self, action: #selector(closeSettings))
-        close.bezelStyle = .rounded
-        close.keyEquivalent = "\u{1b}"
+        closeButton.target = self
+        closeButton.action = #selector(closeSettings)
+        closeButton.bezelStyle = .rounded
+        closeButton.keyEquivalent = "\u{1b}"
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
         saveButton.target = self
         saveButton.action = #selector(save)
-        let buttons = NSStackView(views: [close, saveButton])
+        let buttons = NSStackView(views: [closeButton, saveButton])
+        footerStack = buttons
         buttons.spacing = 8
+        buttons.setHuggingPriority(.required, for: .horizontal)
+        closeButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        saveButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        feedback.setContentHuggingPriority(.defaultLow, for: .horizontal)
         buttons.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(buttons)
         NSLayoutConstraint.activate([
             buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            buttons.widthAnchor.constraint(equalToConstant: 168),
-            close.widthAnchor.constraint(equalToConstant: 80),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: buttons.topAnchor, constant: -20),
+            closeButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
             feedback.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 28),
             feedback.trailingAnchor.constraint(equalTo: buttons.leadingAnchor, constant: -16),
             feedback.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
             feedback.heightAnchor.constraint(lessThanOrEqualToConstant: 48),
-            saveButton.widthAnchor.constraint(equalToConstant: 80)
+            saveButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 80)
         ])
+        relocalize()
     }
 
-    private func label(_ text: String) -> NSTextField {
-        let view = NSTextField(labelWithString: text)
-        view.font = .systemFont(ofSize: 13, weight: .semibold)
-        return view
+    private func addDivider(to stack: NSStackView) {
+        let divider = NSBox()
+        divider.boxType = .separator
+        stack.addArrangedSubview(divider)
+        divider.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.setCustomSpacing(16, after: divider)
     }
 
-    private func hint(_ text: String) -> NSTextField {
-        let view = NSTextField(wrappingLabelWithString: text)
+    private func styleHint(_ view: NSTextField) {
         view.font = .systemFont(ofSize: 11)
         view.textColor = .secondaryLabelColor
-        return view
     }
+
+    func relocalize() {
+        window?.title = L10n.text("AimDrop Settings", "Ustawienia AimDrop")
+        nameLabel.stringValue = L10n.text("AirDrop name", "Nazwa w AirDrop")
+        nameField.setAccessibilityLabel(L10n.text("AirDrop receiver name", "Nazwa widoczna w AirDrop"))
+        avatarPreview.setAccessibilityLabel(L10n.text("iPhone receiver avatar", "Awatar widoczny na iPhonie"))
+        avatarButton.title = L10n.text("Choose image…", "Wybierz zdjęcie…")
+        resetAvatarButton.title = L10n.text("Reset logo", "Przywróć logo")
+        nameHint.stringValue = L10n.text("A new name or avatar requires a new PIN. Reopen AirDrop on your iPhone after pairing.", "Zmiana nazwy lub awatara wymaga nowego PIN-u. Po sparowaniu otwórz ponownie AirDrop na iPhonie.")
+        saveLabel.stringValue = L10n.text("Save received files", "Zapisywanie odebranych plików")
+        let mode = max(0, saveMode.indexOfSelectedItem)
+        saveMode.removeAllItems()
+        saveMode.addItems(withTitles: [L10n.text("Ask for a folder after each transfer", "Pytaj o folder po każdym odbiorze"),
+                                      L10n.text("Automatically save to a folder", "Automatycznie do wybranego folderu")])
+        saveMode.selectItem(at: mode)
+        saveMode.setAccessibilityLabel(L10n.text("Save mode", "Sposób zapisywania plików"))
+        chooseButton.title = L10n.text("Choose…", "Wybierz…")
+        folderHint.stringValue = L10n.text("Files you haven't saved stay in the inbox.", "Pliki oczekujące na zapis pozostają w buforze.")
+        soundButton.title = L10n.text("Play a sound after saving", "Dźwięk po zapisaniu plików")
+        loginItemButton.title = L10n.text("Launch at login", "Uruchamiaj przy logowaniu")
+        loginItemSettingsButton.title = L10n.text("macOS Settings…", "Ustawienia macOS…")
+        languageLabel.stringValue = L10n.text("Language", "Język")
+        let selectedLanguage = max(0, languageMenu.indexOfSelectedItem)
+        languageMenu.removeAllItems()
+        languageMenu.addItems(withTitles: languageChoices.map(\.nativeName))
+        languageMenu.selectItem(at: selectedLanguage)
+        languageMenu.setAccessibilityLabel(L10n.text("Application language", "Język aplikacji"))
+        versionLabel.stringValue = L10n.format("Version %@", "Wersja %@", Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.8.0")
+        updatesHint.stringValue = L10n.text("Automatically checks GitHub for updates every 24 hours.", "Automatycznie sprawdza aktualizacje na GitHubie co 24 godziny.")
+        closeButton.title = L10n.text("Close", "Zamknij")
+        saveButton.title = L10n.text("Save", "Zapisz")
+        setCheckingForUpdates(checkingForUpdates)
+        refreshFolder()
+        refreshLoginItem()
+    }
+
+    private func resizeToFit() {
+        guard let window, let content = window.contentView, let contentStack, let footerStack else { return }
+        content.layoutSubtreeIfNeeded()
+        let height = max(500, ceil(contentStack.fittingSize.height + footerStack.fittingSize.height + 68))
+        guard abs(content.bounds.height - height) > 1 else { return }
+        let frame = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 600, height: height))
+        window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - frame.height,
+                               width: frame.width, height: frame.height), display: window.isVisible)
+    }
+
+    func setCheckingForUpdates(_ checking: Bool) {
+        checkingForUpdates = checking
+        updatesButton.title = checking ? L10n.text("Checking…", "Sprawdzanie…") : L10n.text("Check for Updates…", "Sprawdź aktualizacje…")
+        updatesButton.isEnabled = !checking
+    }
+
+    @objc private func checkForUpdates() { onCheckForUpdates?() }
 
     func present(preferences: AppPreferences, status: String) {
         if window?.isVisible != true {
@@ -166,11 +298,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             avatarPNG = preferences.avatarPNG
             refreshAvatar()
             soundButton.state = preferences.completionSound ? .on : .off
+            languageMenu.selectItem(at: languageChoices.firstIndex(of: preferences.language) ?? 0)
+            loginItemDraft = nil
+            loginItemError = nil
             hasUnsavedChanges = false
             refreshFolder()
             saveButton.isEnabled = true
             setStatus(status)
         }
+        refreshLoginItem()
         showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -179,6 +315,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     func setStatus(_ text: String, error: Bool = false) {
         feedback.stringValue = text
         feedback.textColor = error ? .systemRed : .secondaryLabelColor
+        feedback.toolTip = text
     }
 
     func setSavedStatus(_ text: String, error: Bool = false) {
@@ -193,7 +330,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func refreshFolder() {
-        folderLabel.stringValue = destination?.displayPath ?? "Nie wybrano folderu"
+        folderLabel.stringValue = destination?.displayPath ?? L10n.text("No folder selected", "Nie wybrano folderu")
         folderLabel.toolTip = destination?.displayPath
         let automatic = saveMode.indexOfSelectedItem == 1
         chooseButton.isEnabled = automatic && !isChoosingFile
@@ -201,18 +338,50 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     @objc private func changed() { hasUnsavedChanges = true; saveButton.isEnabled = true; setStatus("") }
+    @objc private func loginItemChanged() {
+        loginItemDraft = loginItemButton.state == .on
+        loginItemError = nil
+        changed()
+        refreshLoginItem()
+    }
+    @objc private func openLoginItemSettings() { loginItems.openSettings() }
+
+    func windowDidBecomeKey(_ notification: Notification) { refreshLoginItem() }
+
+    private func refreshLoginItem() {
+        let status = loginItems.status()
+        loginItemButton.state = (loginItemDraft ?? (status == .enabled)) ? .on : .off
+        loginItemSettingsButton.isHidden = status != .requiresApproval
+        loginItemStatus.textColor = loginItemError == nil ? .secondaryLabelColor : .systemRed
+        if let loginItemError {
+            loginItemStatus.stringValue = L10n.format("Could not change launch at login: %@", "Nie udało się zmienić autostartu: %@", loginItemError.localizedDescription)
+        } else if status == .requiresApproval {
+            loginItemStatus.stringValue = L10n.text("Launch at login is disabled in macOS. Enable AimDrop in System Settings.", "Autostart jest wyłączony w macOS. Włącz AimDrop w ustawieniach systemowych.")
+        } else {
+            switch status {
+            case .enabled, .notRegistered, .notFound:
+                // mainApp can return notFound before its first registration.
+                loginItemStatus.stringValue = ""
+            default:
+                loginItemStatus.stringValue = L10n.text("Could not read the macOS login item status.", "Nie można odczytać stanu autostartu w macOS.")
+            }
+        }
+        loginItemStatus.isHidden = loginItemStatus.stringValue.isEmpty
+        loginItemStatus.toolTip = loginItemStatus.stringValue
+        resizeToFit()
+    }
     func controlTextDidChange(_ notification: Notification) { changed() }
     @objc private func modeChanged() { refreshFolder(); changed() }
 
     @objc private func chooseFolder() {
         guard let window = window, !isChoosingFile else { return }
         guard canChooseFile?() != false else {
-            setStatus("Najpierw zamknij bieżące okno odbioru.", error: true)
+            setStatus(L10n.text("Close the current transfer window first.", "Najpierw zamknij bieżące okno odbioru."), error: true)
             return
         }
         let picker = NSOpenPanel()
-        picker.title = "Folder automatycznego zapisu"
-        picker.prompt = "Wybierz folder"
+        picker.title = L10n.text("Automatic save folder", "Folder automatycznego zapisu")
+        picker.prompt = L10n.text("Choose folder", "Wybierz folder")
         picker.canChooseDirectories = true
         picker.canChooseFiles = false
         picker.canCreateDirectories = true
@@ -233,8 +402,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func refreshAvatar() {
         avatarPreview.image = avatarPNG.flatMap { NSImage(data: $0) }
-            ?? Bundle.main.url(forResource: "AirFolder", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
-            ?? AirFolderArtwork.applicationIcon
+            ?? Bundle.main.url(forResource: "AimDropAvatar", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+            ?? AimDropArtwork.applicationIcon
         resetAvatarButton.isEnabled = avatarPNG != nil && !isChoosingFile
         avatarButton.isEnabled = !isChoosingFile
     }
@@ -250,10 +419,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
     @objc private func chooseAvatar() {
         guard let window, !isChoosingFile else { return }
-        guard canChooseFile?() != false else { setStatus("Najpierw zamknij bieżące okno odbioru.", error: true); return }
+        guard canChooseFile?() != false else { setStatus(L10n.text("Close the current transfer window first.", "Najpierw zamknij bieżące okno odbioru."), error: true); return }
         let picker = NSOpenPanel()
-        picker.title = "Wybierz obraz awatara"
-        picker.prompt = "Dopasuj…"
+        picker.title = L10n.text("Choose an avatar image", "Wybierz obraz awatara")
+        picker.prompt = L10n.text("Adjust…", "Dopasuj…")
         picker.allowedContentTypes = [.image]
         picker.canChooseDirectories = false; picker.canChooseFiles = true; picker.allowsMultipleSelection = false
         self.picker = picker
@@ -263,7 +432,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             guard let self else { return }
             guard response == .OK, let url = picker.url else { self.finishPicker(); return }
             self.picker = nil
-            self.setStatus("Przygotowywanie zdjęcia…")
+            self.setStatus(L10n.text("Preparing image…", "Przygotowywanie zdjęcia…"))
             self.imageQueue.async { [weak self] in
                 let result = Result { try ReceiverAvatar.source(at: url) }
                 DispatchQueue.main.async { [weak self] in
@@ -294,11 +463,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                                                   automaticSave: saveMode.indexOfSelectedItem == 1,
                                                   destination: destination,
                                                   completionSound: soundButton.state == .on,
-                                                  avatarPNG: avatarPNG).validated()
+                                                  avatarPNG: avatarPNG,
+                                                  language: languageChoices[max(0, languageMenu.indexOfSelectedItem)]).validated()
             nameField.stringValue = preferences.receiverName
             hasUnsavedChanges = false
             saveButton.isEnabled = false
-            if onSave?(preferences) == false { hasUnsavedChanges = true; saveButton.isEnabled = true }
+            guard onSave?(preferences) != false else {
+                hasUnsavedChanges = true; saveButton.isEnabled = true
+                return
+            }
+            // Only an explicitly edited checkbox may change the OS setting.
+            // Saving other preferences must not undo a change in System Settings.
+            if let enabled = loginItemDraft {
+                do {
+                    try loginItems.setEnabled(enabled)
+                    loginItemDraft = nil
+                    loginItemError = nil
+                } catch {
+                    loginItemError = error
+                    hasUnsavedChanges = true; saveButton.isEnabled = true
+                }
+            }
+            refreshLoginItem()
         } catch { setStatus(error.localizedDescription, error: true) }
     }
 

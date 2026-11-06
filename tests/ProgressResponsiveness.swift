@@ -3,6 +3,7 @@ import Cocoa
 @main
 struct ProgressResponsivenessChecks {
     static func main() {
+        L10n.configure(.polish)
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
@@ -54,16 +55,21 @@ struct ProgressResponsivenessChecks {
             banners.finish(id: id)
             banners.completed(id: id, target: target, count: 1)
             if index == 0 { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.8)) }
-            guard let panel = NSApp.windows.first(where: { $0.isVisible && $0.title == "AirFolder — pliki odebrane" }),
+            guard let panel = NSApp.windows.first(where: { $0.isVisible && $0.title == "AimDrop — pliki odebrane" }),
                   let view = panel.contentView else { fatalError("Old progress timer removed the completion panel") }
             let buttons = view.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
             precondition(buttons.contains { $0.title == "Pokaż w Finderze" } && buttons.contains { $0.title == "Otwórz" },
-                         "Both actions must be visible immediately")
+                          "Both actions must be visible immediately")
+            L10n.configure(.english)
+            precondition(panel.title == "AimDrop — files received" && panel.isVisible,
+                         "Changing language must refresh the existing completion panel")
+            precondition(buttons.contains { $0.title == "Show in Finder" } && buttons.contains { $0.title == "Open" })
+            L10n.configure(.polish)
             buttons.first { $0.title == (action == .reveal ? "Pokaż w Finderze" : "Otwórz") }!.performClick(nil)
             precondition(actions.last == action && !panel.isVisible, "Click must route the action and dismiss the card")
         }
         banners.completed(id: "dismiss-check", target: target, count: 1)
-        let panel = NSApp.windows.first { $0.isVisible && $0.title == "AirFolder — pliki odebrane" }!
+        let panel = NSApp.windows.first { $0.isVisible && $0.title == "AimDrop — pliki odebrane" }!
         let close = panel.contentView!.subviews.compactMap { $0 as? NSButton }.first { $0.toolTip == "Zamknij powiadomienie" }!
         close.performClick(nil)
         precondition(cancellations == 0 && actions.count == 2 && !panel.isVisible,

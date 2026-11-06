@@ -20,6 +20,7 @@ subprocess.run([
     "-module-cache-path", str(ROOT / ".build/research-module-cache"),
     "-import-objc-header", str(SOURCE / "pake-bridge.h"), str(ROOT / "NativeReceiver/helper.swift"),
     str(ROOT / "Sources/ReceiverAvatar.swift"),
+    str(ROOT / "Sources/Localization.swift"),
     *[str(SOURCE / (name + ".swift")) for name in
       ("airfolder-pairing-prototype", "native-file-service", "streaming-upload", "pair-verify", "pairing-store")],
     *objects, "-Xlinker", "-undefined", "-Xlinker", "dynamic_lookup", "-o", str(output),

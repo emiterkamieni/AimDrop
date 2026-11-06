@@ -173,14 +173,15 @@ class ReceiverIntegrationTests(unittest.TestCase):
         self.assertEqual(list(Path(self.temp.name).iterdir()), [])
 
     def test_complete_upload_on_new_connection_and_replay_refused(self):
+        target = Path(self.temp.name).resolve() / "test.txt"
         ident = str(uuid.uuid4())
         self.grant(ident)
         payload = dvzip(archive([("NSIRD_AirDrop_test/test.txt", b"expected contents")]))
         headers = {"TransferID": ident, "Content-Type": "application/x-dvzip"}
         self.assertEqual(self.post("/Upload", payload, headers)[0], 200)
-        self.assertEqual((Path(self.temp.name) / "test.txt").read_bytes(), b"expected contents")
+        self.assertEqual(target.read_bytes(), b"expected contents")
         completion = self.event("complete")
-        self.assertEqual(completion["paths"], [str(Path(self.temp.name) / "test.txt")])
+        self.assertEqual(completion["paths"], [str(target)])
         self.assertEqual(self.post("/Upload", payload, headers)[0], 403)
 
     def test_truncated_payload_not_reported_as_success(self):
@@ -271,7 +272,7 @@ class ReceiverIntegrationTests(unittest.TestCase):
         self.assertFalse((Path(self.temp.name) / "Media").exists())
 
     def test_completion_points_at_new_file_after_name_collision(self):
-        existing = Path(self.temp.name) / "test.txt"
+        existing = Path(self.temp.name).resolve() / "test.txt"
         existing.write_bytes(b"original")
         ident = str(uuid.uuid4())
         self.grant(ident)

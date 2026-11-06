@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import uuid
+from .localization import message, text
 
 LOG = logging.getLogger("airfrajer")
 
@@ -73,7 +74,7 @@ class NativeReceiver:
                 for done, _ in self.pending.values():
                     done.set()
             if not self.closing and not self.stopped.is_set():
-                self.emit("error", fatal=True, message="Natywny odbiornik AirDrop zatrzymał się. Uruchom AirFolder ponownie.")
+                self.emit("error", fatal=True, message=text("The native AirDrop receiver stopped. Restart AimDrop.", "Natywny odbiornik AirDrop zatrzymał się. Uruchom AimDrop ponownie."))
                 self.stopped.set()
 
     def wait_ready(self):
@@ -82,9 +83,9 @@ class NativeReceiver:
             if self.stopped.is_set():
                 return None
             if time.monotonic() >= deadline:
-                raise RuntimeError("Upłynął czas uruchamiania odbiornika AirDrop.")
+                raise RuntimeError(message("The AirDrop receiver took too long to start.", "Upłynął czas uruchamiania odbiornika AirDrop."))
         if not self.ready_fields:
-            raise RuntimeError("Nie można uruchomić natywnego odbiornika AirDrop.")
+            raise RuntimeError(message("Cannot start the native AirDrop receiver.", "Nie można uruchomić natywnego odbiornika AirDrop."))
         if self.stopped.is_set():
             return None
         return self.ready_fields
@@ -94,7 +95,7 @@ class NativeReceiver:
         # travel in the other direction and go only to the AppKit panel).
         with self.lock:
             if self.closing or self.process.poll() is not None:
-                raise RuntimeError("Odbiornik AirDrop jest niedostępny.")
+                raise RuntimeError(message("The AirDrop receiver is unavailable.", "Odbiornik AirDrop jest niedostępny."))
             self.process.stdin.write(json.dumps(command) + "\n")
             self.process.stdin.flush()
 
@@ -113,7 +114,7 @@ class NativeReceiver:
             self._send(dict(command, request_id=request))
             if (not done.wait(10) or result.get("ok") is not True or result.get("name") != command["name"]
                     or (command["command"] == "set_profile" and result.get("avatar_digest") != command["avatar_digest"])):
-                raise RuntimeError("Odbiornik nie potwierdził ustawień nazwy i awatara.")
+                raise RuntimeError(message("The receiver did not confirm the name and avatar settings.", "Odbiornik nie potwierdził ustawień nazwy i awatara."))
             return dict(pairing_reset=result.get("pairing_reset") is True, avatar_digest=result["avatar_digest"])
         finally:
             with self.lock:

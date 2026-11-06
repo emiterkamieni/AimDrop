@@ -88,7 +88,14 @@ import zlib
             properties: [kCGImagePropertyPNGDictionary: [kCGImagePropertyPNGDescription: "same picture, different metadata"]])
         let alternate = try ReceiverAvatar(png: metadata)
         precondition(alternate.digest == centered.digest, "Metadata must not change pairing identity")
-        let baseline = try ReceiverAvatar.defaultLogo(at: URL(fileURLWithPath: CommandLine.arguments.count >= 3 ? CommandLine.arguments[2] : ".build/artwork/AirFolder.png"))
+        L10n.configure(.english)
+        precondition(AvatarError.invalidImage.localizedDescription.hasPrefix("Cannot read this image."))
+        L10n.configure(.polish)
+        precondition(AvatarError.invalidImage.localizedDescription.hasPrefix("Nie można odczytać tego obrazu."))
+        let relocalized = try ReceiverAvatar(png: centered.png)
+        precondition(relocalized.digest == centered.digest && relocalized.png == centered.png,
+                     "Changing language must never change the avatar fingerprint or raster")
+        let baseline = try ReceiverAvatar.defaultLogo(at: URL(fileURLWithPath: CommandLine.arguments.count >= 3 ? CommandLine.arguments[2] : ".build/artwork/AimDropAvatar.png"))
         // ImageIO may return a CGImage for a truncated IDAT and silently draw
         // transparent pixels. It must not become a new valid pairing avatar.
         var offset = 8

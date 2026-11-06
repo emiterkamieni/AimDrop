@@ -154,7 +154,7 @@ def main():
             run(['--pairing-store-check'], server_env)
             migrated_bytes = path.read_bytes()
             migrated = json.loads(migrated_bytes)
-            assert migrated['version'] == 4 and migrated['presentedName'] == 'AirFolder Logo Test'
+            assert migrated['version'] == 4 and migrated['presentedName'] == 'AimDrop Logo Test'
             assert migrated['signingSeed'] != old['signingSeed'] and not migrated['peers']
             assert migrated['serverID'] != old['serverID'] and migrated['irk'] != old['irk']
             run(['--pairing-store-check'], server_env)

@@ -22,6 +22,7 @@ from receiver.configuration import normalized_receiver_name
 from receiver.http import ReceiverServer
 from receiver.inbox import Inbox
 from receiver.media import load_capabilities
+from receiver.localization import configure, error_message, language_code, message
 from receiver.native import NativeReceiver
 from receiver.sessions import Sessions
 
@@ -89,7 +90,7 @@ class SaveJobs:
             event, fields = "save_canceled", dict(id=ident)
         except Exception as error:
             LOG.warning("Could not save buffered transfer (%s)", type(error).__name__)
-            event, fields = "error", dict(id=ident, phase="saving", message=str(error))
+            event, fields = "error", dict(id=ident, phase="saving", message=error_message(error))
         finally:
             # Remove the old token before acknowledging, so an immediate retry
             # cannot inherit cancellation or be mistaken for a duplicate save.
@@ -119,7 +120,7 @@ def identity(directory):
         value = json.loads(path.read_text())
         instance = value["instance"]
         if len(instance) != 12 or any(char not in "0123456789abcdef" for char in instance):
-            raise ValueError("Niepoprawna tożsamość odbiornika.")
+            raise ValueError(message("Invalid receiver identity.", "Niepoprawna tożsamość odbiornika."))
     else:
         instance = uuid.uuid4().hex[:12]
         path.write_text(json.dumps({"instance": instance}))
@@ -130,7 +131,7 @@ def identity(directory):
         subprocess.run([
             "/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
             "-keyout", str(key), "-out", str(cert), "-days", "365", "-sha256",
-            "-subj", "/CN=AirFolder",
+            "-subj", "/CN=AimDrop",
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         key.chmod(0o600)
         cert.chmod(0o600)
@@ -153,7 +154,8 @@ def hardware_model():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", default="AirFolder")
+    parser.add_argument("--name", default="AimDrop")
+    parser.add_argument("--language", default=os.environ.get("AIMDROP_LANGUAGE", "en"))
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-advertise", action="store_true", help="Loopback-only integration testing")
@@ -164,10 +166,11 @@ def main():
     parser.add_argument("--avatar-digest")
     parser.add_argument("--native-loopback", action="store_true", help="Isolated native lifecycle checks")
     args = parser.parse_args()
+    configure(args.language)
     # Validate here rather than argparse's type hook, which echoes invalid values.
     args.name = normalized_receiver_name(args.name)
     if args.native_helper and not args.native_artwork:
-        raise ValueError("Brak grafiki odbiornika AirDrop.")
+        raise ValueError(message("AirDrop receiver artwork is missing.", "Brak grafiki odbiornika AirDrop."))
     os.umask(0o077)
     logging.Formatter.converter = time.gmtime
     logging.basicConfig(level=logging.INFO, format="%(asctime)s.%(msecs)03dZ %(levelname)s %(message)s",
@@ -177,7 +180,7 @@ def main():
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        raise RuntimeError("Inny odbiornik AirFolder jest już uruchomiony.")
+        raise RuntimeError(message("Another AimDrop receiver is already running.", "Inny odbiornik AimDrop jest już uruchomiony."))
     output_lock = threading.Lock()
     stopped = threading.Event()
 
@@ -234,12 +237,26 @@ def main():
                         saves.cancel(command.get("id"))
                     elif action == "defer" and inbox:
                         emit("pending", transfers=inbox.list_ready())
+                    elif action == "set_language":
+                        # Presentation only: no profile update, listener restart or
+                        # native command, so active transfers and pairing survive.
+                        request_id = command.get("request_id")
+                        if (not isinstance(request_id, str) or len(request_id) != 36
+                                or str(uuid.UUID(request_id)) != request_id.lower()):
+                            raise ValueError(message("Invalid request identifier.", "Nieprawidłowy identyfikator żądania."))
+                        try:
+                            configure(command.get("language"))
+                        except ValueError as error:
+                            emit("language_result", request_id=request_id, ok=False,
+                                 language=language_code(), message=error_message(error))
+                        else:
+                            emit("language_result", request_id=request_id, ok=True, language=language_code())
                     elif action in ("set_name", "set_profile"):
                         result_event = "profile_result" if action == "set_profile" else "name_result"
                         request_id = command.get("request_id")
                         if (not isinstance(request_id, str) or len(request_id) != 36
                                 or str(uuid.UUID(request_id)) != request_id.lower()):
-                            raise ValueError("Nieprawidłowy identyfikator żądania.")
+                            raise ValueError(message("Invalid request identifier.", "Nieprawidłowy identyfikator żądania."))
                         try:
                             name = normalized_receiver_name(command.get("name"))
                             pairing_reset = False
@@ -249,7 +266,7 @@ def main():
                                 if (not native or "avatar_path" not in command or
                                         (path is not None and (not isinstance(path, str) or not Path(path).is_absolute())) or
                                         not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
-                                    raise ValueError("Nieprawidłowe ustawienia awatara.")
+                                    raise ValueError(message("Invalid avatar settings.", "Nieprawidłowe ustawienia awatara."))
                                 profile = native.update_profile(name, path, digest)
                                 pairing_reset = profile["pairing_reset"]
                             elif native:
@@ -257,7 +274,7 @@ def main():
                             server.receiver_name = name
                         except (ValueError, RuntimeError, OSError) as error:
                             emit(result_event, request_id=request_id, ok=False,
-                                 message=str(error), name=server.receiver_name)
+                                  message=error_message(error), name=server.receiver_name)
                         else:
                             emit(result_event, request_id=request_id, ok=True,
                                   name=server.receiver_name, **(dict(pairing_reset=pairing_reset) if native else {}),
@@ -311,5 +328,5 @@ if __name__ == "__main__":
         main()
     except Exception as error:
         LOG.exception("Receiver could not start")
-        print(json.dumps({"event": "error", "message": str(error), "fatal": True}), flush=True)
+        print(json.dumps({"event": "error", "message": error_message(error), "fatal": True}), flush=True)
         sys.exit(1)

@@ -25,7 +25,7 @@ final class HelperEvents: @unchecked Sendable {
         } catch { exit(1) }
     }
     func fatal() -> Never {
-        send("error", ["message": "Nie można uruchomić natywnego odbiornika AirDrop. Szczegóły w dzienniku AirFolder."])
+        send("error", ["message": "Nie można uruchomić natywnego odbiornika AirDrop. Szczegóły w dzienniku AimDrop."])
         exit(1)
     }
 }
@@ -64,7 +64,7 @@ actor NativeReceiverHost {
         let txt = NWTXTRecord(["at": tag.map { String(format: "%02x", $0) }.joined(),
             "sid": state.serverID, "sn": state.loopback ? "pl.airfolder.protocolprobe" : "com.apple.sharingd.AirDrop",
             "dnm": state.receiverName])
-        return NWListener.Service(name: "AirFolder-" + state.serverID, type: type, txtRecord: txt)
+        return NWListener.Service(name: "AimDrop-" + state.serverID, type: type, txtRecord: txt)
     }
     func start() async throws {
         try await state.files?.start()
@@ -128,7 +128,7 @@ actor NativeReceiverHost {
     }
 }
 
-@main struct AirFolderNativeReceiver {
+@main struct AimDropNativeReceiver {
     static func main() {
         let events = HelperEvents()
         var options: [String: String] = [:]

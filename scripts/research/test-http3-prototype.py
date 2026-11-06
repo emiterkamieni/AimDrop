@@ -1,4 +1,4 @@
-"""Exercise native HTTP3 against an isolated, real AirFolder backend and inbox."""
+"""Exercise native HTTP3 against an isolated, real AimDrop backend and inbox."""
 import hashlib
 import os
 from pathlib import Path

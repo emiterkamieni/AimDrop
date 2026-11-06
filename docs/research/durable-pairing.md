@@ -1,5 +1,7 @@
 # Trwałe parowanie — stan 6 listopada 2026
 
+Historical implementation and interoperability notes for the native transport.
+
 ## Zakres potwierdzenia
 
 **Działa w lokalnych, rzeczywistych procesach natywnych:** pierwsze parowanie
@@ -107,7 +109,7 @@ Nie odczytują tożsamości konta Apple.
 
 ## Zwykła aplikacja
 
-`AppKit → receiver/main.py → AirFolderReceiver`. Python uruchamia natywny
+`AppKit → receiver/main.py → AimDropReceiver`. Python uruchamia natywny
 proces dopiero po związaniu backendu HTTPS na `[::1]:port`; port jest dynamiczny.
 Gotowość UI wymaga gotowości obu usług parowania oraz listenera plików.
 Natywne `pin`/`pin_closed` trafiają przez IPC do `PairingWindowController`.

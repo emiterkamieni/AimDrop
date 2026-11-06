@@ -1,5 +1,8 @@
 # Ikona odbiorcy AirDrop — ustalenia 2026-11-06
 
+> Historyczne próby używały nazwy i logo AirFolder. Od 0.7.0 bieżąca aplikacja
+> to AimDrop; aktualny pakiet i grafiki opisuje [README](../../README.md).
+
 ## Wynik dla AirFolder
 
 **Użytkownik potwierdził 6 listopada wyświetlenie logo AirFolder na iPhonie**

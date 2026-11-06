@@ -29,7 +29,7 @@ private final class ProgressTrackView: NSView {
         super.init(frame: frameRect)
         setAccessibilityElement(true)
         setAccessibilityRole(.progressIndicator)
-        setAccessibilityLabel("Postęp przesyłania")
+        setAccessibilityLabel(L10n.text("Transfer progress", "Postęp przesyłania"))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -42,7 +42,7 @@ private final class ProgressTrackView: NSView {
             timer = nil
             setAccessibilityValue("\(Int(fraction * 100))%")
         } else {
-            setAccessibilityValue("Trwa przesyłanie")
+            setAccessibilityValue(L10n.text("Transfer in progress", "Trwa przesyłanie"))
             resumeAnimation()
         }
         needsDisplay = true
@@ -86,14 +86,14 @@ private final class ProgressTrackView: NSView {
 
 private final class ProgressCardView: NSView {
     static let size = NSSize(width: 380, height: 128)
-    private let title = NSTextField(labelWithString: "AirFolder")
-    private let subtitle = NSTextField(labelWithString: "Przygotowywanie odbioru…")
-    private let detail = NSTextField(labelWithString: "Oczekiwanie na dane")
+    private let title = NSTextField(labelWithString: "AimDrop")
+    private let subtitle = NSTextField(labelWithString: L10n.text("Preparing to receive…", "Przygotowywanie odbioru…"))
+    private let detail = NSTextField(labelWithString: L10n.text("Waiting for data", "Oczekiwanie na dane"))
     private let preview = NSImageView()
     private let bar = ProgressTrackView(frame: .zero)
     private let cancelButton = NSButton()
-    private let revealButton = NSButton(title: "Pokaż w Finderze", target: nil, action: nil)
-    private let openButton = NSButton(title: "Otwórz", target: nil, action: nil)
+    private let revealButton = NSButton(title: L10n.text("Show in Finder", "Pokaż w Finderze"), target: nil, action: nil)
+    private let openButton = NSButton(title: L10n.text("Open", "Otwórz"), target: nil, action: nil)
     private let material = NSVisualEffectView()
     var onCancel: (() -> Void)?
     var onFileAction: ((TransferFileAction) -> Void)?
@@ -118,9 +118,9 @@ private final class ProgressCardView: NSView {
         addSubview(material)
 
         let icon = NSImageView(frame: NSRect(x: 11, y: 11, width: 48, height: 48))
-        icon.image = AirFolderArtwork.applicationIcon
+        icon.image = AimDropArtwork.applicationIcon
         icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.setAccessibilityLabel("AirFolder")
+        icon.setAccessibilityLabel("AimDrop")
         addSubview(icon)
 
         title.frame = NSRect(x: 66, y: 15, width: 242, height: 18)
@@ -142,7 +142,8 @@ private final class ProgressCardView: NSView {
         preview.layer?.cornerRadius = 8
         preview.layer?.masksToBounds = true
         preview.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
-        preview.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Przesyłane pliki")
+        preview.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: L10n.text("Transferred files", "Przesyłane pliki"))
+        preview.setAccessibilityLabel(L10n.text("Transferred files", "Przesyłane pliki"))
         preview.contentTintColor = .secondaryLabelColor
         addSubview(preview)
 
@@ -151,9 +152,9 @@ private final class ProgressCardView: NSView {
 
         cancelButton.frame = NSRect(x: 347, y: 98, width: 18, height: 18)
         cancelButton.isBordered = false
-        cancelButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Anuluj odbieranie")
+        cancelButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: L10n.text("Cancel receiving", "Anuluj odbieranie"))
         cancelButton.contentTintColor = .secondaryLabelColor
-        cancelButton.toolTip = "Anuluj odbieranie"
+        cancelButton.toolTip = L10n.text("Cancel receiving", "Anuluj odbieranie")
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
         addSubview(cancelButton)
@@ -180,12 +181,14 @@ private final class ProgressCardView: NSView {
         preview.frame = NSRect(x: 320, y: 14, width: 44, height: 44)
         detail.frame.origin.y = 73
         cancelButton.frame = NSRect(x: 347, y: 98, width: 18, height: 18)
-        title.stringValue = "AirFolder"
-        subtitle.stringValue = "\(saving ? "Zapisuję" : "Odbieram") (\(summary))"
+        title.stringValue = "AimDrop"
+        subtitle.stringValue = saving ? L10n.format("Saving (%@)", "Zapisuję (%@)", summary)
+            : L10n.format("Receiving (%@)", "Odbieram (%@)", summary)
         cancelButton.isEnabled = true
         cancelButton.isHidden = false
-        cancelButton.toolTip = saving ? "Anuluj zapisywanie — pliki pozostaną w buforze" : "Anuluj odbieranie"
-        cancelButton.setAccessibilityLabel(saving ? "Anuluj zapisywanie" : "Anuluj odbieranie")
+        cancelButton.toolTip = saving ? L10n.text("Cancel saving — files will stay in the buffer", "Anuluj zapisywanie — pliki pozostaną w buforze")
+            : L10n.text("Cancel receiving", "Anuluj odbieranie")
+        cancelButton.setAccessibilityLabel(saving ? L10n.text("Cancel saving", "Anuluj zapisywanie") : L10n.text("Cancel receiving", "Anuluj odbieranie"))
     }
 
     func setPreview(_ image: CGImage) {
@@ -202,26 +205,27 @@ private final class ProgressCardView: NSView {
 
     func update(_ progress: TransferProgress) {
         detail.stringValue = progress.text
-        detail.toolTip = progress.estimated ? "Szacowany postęp według rozmiaru archiwum podanego przez iPhone'a." : progress.text
-        bar.setAccessibilityLabel(progress.estimated ? "Szacowany postęp przesyłania" : "Postęp przesyłania")
+        detail.toolTip = progress.estimated ? L10n.text("Estimated progress based on the archive size reported by your iPhone.", "Szacowany postęp według rozmiaru archiwum podanego przez iPhone'a.") : progress.text
+        bar.setAccessibilityLabel(progress.estimated ? L10n.text("Estimated transfer progress", "Szacowany postęp przesyłania") : L10n.text("Transfer progress", "Postęp przesyłania"))
         bar.setFraction(progress.fraction)
     }
 
     func finish(saving: Bool, awaitingDestination: Bool) {
         bar.setFraction(1)
-        detail.stringValue = saving ? "Zapis zakończony" : (awaitingDestination
-            ? "Transfer zakończony — wybierz folder zapisu" : "Pliki odebrane — przygotowywanie zapisu")
+        detail.stringValue = saving ? L10n.text("Save complete", "Zapis zakończony") : (awaitingDestination
+            ? L10n.text("Transfer complete — choose a save folder", "Transfer zakończony — wybierz folder zapisu")
+            : L10n.text("Files received — preparing to save", "Pliki odebrane — przygotowywanie zapisu"))
         cancelButton.isHidden = true
     }
 
     func completed(summary: String, directory: String) {
-        title.stringValue = "Odebrano przez AirDrop"
-        subtitle.stringValue = "Odebrano (\(summary))"
+        title.stringValue = L10n.text("Received via AirDrop", "Odebrano przez AirDrop")
+        subtitle.stringValue = L10n.format("Received (%@)", "Odebrano (%@)", summary)
         title.frame.size.width = 230
         subtitle.frame.size.width = 230
         preview.frame = NSRect(x: 304, y: 18, width: 38, height: 38)
         detail.frame.origin.y = 65
-        detail.stringValue = "Zapisano w: \(URL(fileURLWithPath: directory).lastPathComponent)"
+        detail.stringValue = L10n.format("Saved to: %@", "Zapisano w: %@", URL(fileURLWithPath: directory).lastPathComponent)
         detail.toolTip = directory
         bar.setFraction(1)
         bar.isHidden = true
@@ -230,13 +234,28 @@ private final class ProgressCardView: NSView {
         cancelButton.frame = NSRect(x: 348, y: 12, width: 18, height: 18)
         cancelButton.isEnabled = true
         cancelButton.isHidden = false
-        cancelButton.toolTip = "Zamknij powiadomienie"
-        cancelButton.setAccessibilityLabel("Zamknij powiadomienie")
+        cancelButton.toolTip = L10n.text("Dismiss notification", "Zamknij powiadomienie")
+        cancelButton.setAccessibilityLabel(L10n.text("Dismiss notification", "Zamknij powiadomienie"))
     }
 
     func cancelling() {
         cancelButton.isEnabled = false
-        detail.stringValue = "Anulowanie…"
+        detail.stringValue = L10n.text("Canceling…", "Anulowanie…")
+    }
+
+    func refreshLocalization(summary: String, saving: Bool, progress: TransferProgress,
+                             directory: String?, awaitingDestination: Bool?) {
+        let wasCancelling = !cancelButton.isEnabled
+        revealButton.title = L10n.text("Show in Finder", "Pokaż w Finderze")
+        openButton.title = L10n.text("Open", "Otwórz")
+        preview.setAccessibilityLabel(L10n.text("Transferred files", "Przesyłane pliki"))
+        if let directory { completed(summary: summary, directory: directory) }
+        else {
+            prepare(summary: summary, saving: saving)
+            update(progress)
+            if let awaitingDestination { finish(saving: saving, awaitingDestination: awaitingDestination) }
+            else if wasCancelling { cancelling() }
+        }
     }
 
     @objc private func cancelClicked() {
@@ -264,7 +283,12 @@ final class TransferProgressBanners: NSObject {
     private final class Banner {
         let panel: ProgressPanel
         let view: ProgressCardView
-        var summary = "pliki"
+        var names: [String] = []
+        var folders: Set<String> = []
+        var count = 0
+        var summary: String { TransferSummary.describe(names: names, folders: folders, fallbackCount: count) }
+        var progress = TransferProgress(event: [:])
+        var awaitingDestination: Bool?
         var saving = false
         var generation = 0
         var previewGeneration = 0
@@ -277,7 +301,7 @@ final class TransferProgressBanners: NSObject {
             panel = ProgressPanel(contentRect: NSRect(origin: .zero, size: ProgressCardView.size),
                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.contentView = view
-            panel.title = "AirFolder — postęp przesyłania"
+            panel.title = L10n.text("AimDrop — transfer progress", "AimDrop — postęp przesyłania")
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hasShadow = true
@@ -302,9 +326,19 @@ final class TransferProgressBanners: NSObject {
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(positionPanels),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshLocalization), name: L10n.didChangeNotification, object: nil)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc func refreshLocalization() {
+        for banner in banners.values {
+            banner.panel.title = banner.target == nil ? L10n.text("AimDrop — transfer progress", "AimDrop — postęp przesyłania")
+                : L10n.text("AimDrop — files received", "AimDrop — pliki odebrane")
+            banner.view.refreshLocalization(summary: banner.summary, saving: banner.saving, progress: banner.progress,
+                                            directory: banner.target?.directory, awaitingDestination: banner.awaitingDestination)
+        }
+    }
 
     private func banner(id: String) -> Banner {
         if let existing = banners[id] { return existing }
@@ -332,10 +366,13 @@ final class TransferProgressBanners: NSObject {
         let banner = banner(id: id)
         banner.generation += 1
         banner.previewGeneration += 1
-        banner.summary = TransferSummary.describe(names: event["files"] as? [String] ?? [],
-                                                   folders: Set(event["folders"] as? [String] ?? []))
+        banner.names = event["files"] as? [String] ?? []
+        banner.folders = Set(event["folders"] as? [String] ?? [])
+        banner.saving = false
+        banner.awaitingDestination = nil
+        banner.progress = TransferProgress(event: [:])
         banner.view.prepare(summary: banner.summary, saving: false)
-        banner.view.update(TransferProgress(event: [:]))
+        banner.view.update(banner.progress)
         positionPanels()
         // Display the card before decoding sender-supplied media. ImageIO may
         // need to initialize a codec; that must not delay the UI or IPC events.
@@ -360,11 +397,15 @@ final class TransferProgressBanners: NSObject {
         let banner = banner(id: id)
         banner.generation += 1
         banner.saving = progress.saving
+        banner.progress = progress
+        banner.awaitingDestination = nil
         if let receipt = receipt {
             let urls = (receipt["paths"] as? [String] ?? []).map { URL(fileURLWithPath: $0) }
-            banner.summary = TransferSummary.describe(urls: urls, fallbackCount: receipt["count"] as? Int ?? 0)
-        } else if banner.summary == "pliki", let count = progress.totalFiles {
-            banner.summary = TransferSummary.noun(count, "plik", "pliki", "plików")
+            banner.names = urls.map { $0.lastPathComponent }
+            banner.folders = Set(urls.filter { TransferSummary.kind($0) == .folder }.map { $0.lastPathComponent })
+            banner.count = receipt["count"] as? Int ?? 0
+        } else if banner.names.isEmpty, let count = progress.totalFiles {
+            banner.count = count
         }
         banner.view.prepare(summary: banner.summary, saving: progress.saving)
         banner.view.update(progress)
@@ -373,6 +414,7 @@ final class TransferProgressBanners: NSObject {
 
     func update(id: String, progress: TransferProgress) {
         guard let banner = banners[id], banner.target == nil else { return }
+        banner.progress = progress
         banner.view.update(progress)
     }
 
@@ -380,6 +422,7 @@ final class TransferProgressBanners: NSObject {
         guard let banner = banners[id], banner.target == nil else { return }
         banner.generation += 1
         let generation = banner.generation
+        banner.awaitingDestination = awaitingDestination
         banner.view.finish(saving: banner.saving, awaitingDestination: awaitingDestination)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self, weak banner] in
             guard let self = self, let banner = banner,
@@ -393,10 +436,11 @@ final class TransferProgressBanners: NSObject {
         banner.generation += 1  // Invalidate the short-lived progress completion timer.
         banner.previewGeneration += 1
         banner.target = target
-        banner.panel.title = "AirFolder — pliki odebrane"
+        banner.panel.title = L10n.text("AimDrop — files received", "AimDrop — pliki odebrane")
         let urls = target.paths.map { URL(fileURLWithPath: $0) }
-        if banner.summary == "pliki" {
-            banner.summary = TransferSummary.describe(names: urls.map { $0.lastPathComponent }, fallbackCount: count)
+        if banner.names.isEmpty {
+            banner.names = urls.map { $0.lastPathComponent }
+            banner.count = count
         }
         banner.view.completed(summary: banner.summary, directory: target.directory)
         positionPanels()
@@ -459,14 +503,14 @@ final class TransferProgressBanners: NSObject {
     static func renderPreview(to url: URL, completion: Bool = false) throws {
         let banner = Banner()
         if completion {
-            banner.view.completed(summary: "1 wideo", directory: "/Example/Filmy")
+            banner.view.completed(summary: TransferSummary.describe(names: ["clip.mov"]), directory: "/Example/Filmy")
         } else {
-            banner.view.prepare(summary: "9 zdjęć i 1 wideo", saving: false)
+            banner.view.prepare(summary: TransferSummary.describe(names: Array(repeating: "photo.jpg", count: 9) + ["clip.mov"]), saving: false)
             banner.view.update(TransferProgress(event: ["bytes": 46_000_000, "total_bytes": 100_000_000,
                                                        "files_received": 4, "total_files": 10]))
         }
         guard let bitmap = banner.view.previewImage(), let png = bitmap.representation(using: .png, properties: [:]) else {
-            throw NSError(domain: "AirFolder", code: 2, userInfo: [NSLocalizedDescriptionKey: "Nie udało się wyrenderować podglądu."])
+            throw NSError(domain: "AimDrop", code: 2, userInfo: [NSLocalizedDescriptionKey: L10n.text("Could not render the preview.", "Nie udało się wyrenderować podglądu.")])
         }
         try png.write(to: url)
         banner.panel.close()

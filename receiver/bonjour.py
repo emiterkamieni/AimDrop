@@ -4,6 +4,7 @@ import logging
 import select
 import socket
 import threading
+from .localization import message
 
 LOG = logging.getLogger(__name__)
 INCLUDE_P2P_AND_AWDL = 0x00120000
@@ -41,13 +42,13 @@ class Advertisement:
             self.txt, self.callback, None,
         )
         if error:
-            raise RuntimeError("Bonjour registration failed (%s)" % error)
+            raise RuntimeError(message("Bonjour registration failed (%s).", "Nie udało się zarejestrować odbiornika Bonjour (%s).", error))
         self.thread = threading.Thread(target=self._process, name="bonjour", daemon=True)
         self.thread.start()
 
     def _registered(self, ref, flags, error, name, service, domain, context):
         if error:
-            self.on_error("Bonjour: błąd %s. Sprawdź dostęp AirFolder do sieci lokalnej w Ustawieniach systemowych." % error)
+            self.on_error(str(message("Bonjour error %s. Check AimDrop's local network access in System Settings.", "Bonjour: błąd %s. Sprawdź dostęp AimDrop do sieci lokalnej w Ustawieniach systemowych.", error)))
         else:
             LOG.info("Bonjour registered on peer-to-peer/AWDL interfaces")
 
@@ -59,7 +60,7 @@ class Advertisement:
                 if ready:
                     error = self.lib.DNSServiceProcessResult(self.ref)
                     if error:
-                        self.on_error("Utracono ogłaszanie odbiornika Bonjour (%s)." % error)
+                        self.on_error(str(message("The Bonjour receiver advertisement was lost (%s).", "Utracono ogłaszanie odbiornika Bonjour (%s).", error)))
                         break
         except (OSError, ValueError):
             if not self.stopped.is_set():

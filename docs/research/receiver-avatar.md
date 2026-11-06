@@ -1,4 +1,6 @@
-# Awatar odbiorcy — 0.6.1
+# Awatar odbiorcy — AimDrop 0.7.0
+
+Historical implementation notes. Current releases use a separate circular contact image.
 
 ## Ustawienia
 
@@ -42,10 +44,15 @@ uznać uszkodzony, częściowy obraz za kompletny.
 ## Parowanie
 
 Magazyn v4 dodaje `presentedAvatarDigest`. W v3 brak tego pola oznacza dawne logo
-AirFolder. Aktualizacja v3 → v4 przy tej samej nazwie i logo dopisuje fingerprint,
-zachowując seed, identyfikatory, IRK, daty i peerów. Pierwsze uruchomienie z nowym
-obrazem od razu wykonuje jeden pełny reset. Historyczna migracja v1/v2 zachowuje
-wcześniejszą zasadę resetu.
+AirFolder. Jego historyczny fingerprint jest stały, niezależny od bieżącego logo
+dołączonego do aplikacji. Przy tej samej nazwie i rzeczywiście tym samym obrazie
+v3 → v4 zachowuje seed, identyfikatory, IRK, daty i peerów. Zastąpienie dawnego
+logo znakiem AimDrop wykonuje jeden pełny reset parowania — zarówno dla v3,
+jak i v4. Kolejne uruchomienie z tym samym profilem zachowuje już nowe klucze.
+Historyczna migracja v1/v2 zachowuje wcześniejszą zasadę resetu.
+
+Nazwa przestrzeni fingerprintu `AirFolderAvatar-rgba8-srgb-256-v1` pozostaje
+stała: własny, niezmieniony awatar daje ten sam digest po zmianie nazwy aplikacji.
 
 Rzeczywista zmiana nazwy lub pikseli odświeża pełną tożsamość, poświadczenia PIN
 i aktory parowania. Powtórzony zapis oraz restart z tym samym profilem nie zmieniają
@@ -62,7 +69,8 @@ Przeszły:
 - `tests/SettingsChecks.swift`: starsze preferencje, zapis obrazu, zmiana tylko
   awatara, korelacja profilu, anulowanie wyboru/kadrowania i niezapisanej zmiany,
   zatwierdzanie przywróconego logo;
-- `scripts/native-smoke.py`: rzeczywisty pakiet, migracja v3 bez ponownego PIN-u,
+- `scripts/native-smoke.py`: rzeczywisty pakiet, migracja dawnego logo v3/v4
+  do AimDrop z jednorazowym resetem parowania,
   nowa nazwa/awatar, odrzucenie dawnych kluczy, dokładne bajty PNG po PIN-ie,
   ta sama grafika z innych plików, restart z własnym awatarem, błędne PNG bez
   zmiany kluczy, przywrócenie logo, HTTP3/SHA-256, bufor i cykl życia procesów;

@@ -55,7 +55,7 @@ distributed actor RPPairingDistributedActor: NWSingletonPublishedActor {
         DispatchQueue.global().asyncAfter(deadline: .now() + 12) { exit(8) }
         do {
             let arguments = Array(CommandLine.arguments.dropFirst())
-            let image = try Data(contentsOf: URL(fileURLWithPath: ".build/artwork/AirFolder.png"))
+            let image = try Data(contentsOf: URL(fileURLWithPath: ".build/artwork/AimDropAvatar.png"))
             if arguments.first == "--client", arguments.count >= 2, let rawPort = UInt16(arguments[1]), let port = NWEndpoint.Port(rawValue: rawPort) {
                 let wrongPIN = arguments.contains("--wrong-pin")
                 let parameters = try parameters(server: false, wrongPIN: wrongPIN)
@@ -68,7 +68,7 @@ distributed actor RPPairingDistributedActor: NWSingletonPublishedActor {
                         print("wrong_pin_unexpectedly_accepted")
                         exit(1)
                     }
-                    guard let result = response?.first, result.contactImageData == image, result.deviceName == "AirFolder" else {
+                    guard let result = response?.first, result.contactImageData == image, result.deviceName == "AimDrop" else {
                         throw NSError(domain: "Probe", code: 5)
                     }
                     print("native_actor_spake_image_round_trip=ok bytes=\(image.count)")
@@ -82,14 +82,14 @@ distributed actor RPPairingDistributedActor: NWSingletonPublishedActor {
                 }
             }
             guard arguments == ["--server"] else { throw NSError(domain: "Probe", code: 6) }
-            let server = NWActorSystem(service: NWListener.Service(name: "AirFolder Loopback", type: "_airfolderprobe._tcp"), parameters: try parameters(server: true))
+            let server = NWActorSystem(service: NWListener.Service(name: "AimDrop Loopback", type: "_airfolderprobe._tcp"), parameters: try parameters(server: true))
             let privateKey = Curve25519.Signing.PrivateKey()
             var irk = Data(count: 16)
             let randomStatus = irk.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!) }
             guard randomStatus == errSecSuccess else { throw NSError(domain: "Probe", code: 7) }
             let identity = RPPairingTemporaryIdentity(
-                contactImageData: image, dateAdded: Date(), deviceName: "AirFolder",
-                identifier: UUID().uuidString, givenName: "AirFolder", familyName: "",
+                contactImageData: image, dateAdded: Date(), deviceName: "AimDrop",
+                identifier: UUID().uuidString, givenName: "AimDrop", familyName: "",
                 deviceIRKData: irk, devicePublicKey: privateKey.publicKey.rawRepresentation
             )
             let actor = RPPairingDistributedActor(identity: identity, actorSystem: server)

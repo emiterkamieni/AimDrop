@@ -1,7 +1,8 @@
 import Cocoa
 
 // Render the user's unmodified SVG into the local macOS icon set.
-// Palette: air #2CBDF1, signal #1876E8, depth #0C479D, porcelain #F3FBFF.
+// Keep the supplied black mark on a light native tile; the menu-bar template
+// uses the original silhouette and follows the system's light/dark appearance.
 func color(_ hex: UInt32) -> NSColor {
     NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255,
             green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
@@ -13,7 +14,7 @@ func png(size: Int, draw: () -> Void) throws -> Data {
                                         isPlanar: false, colorSpaceName: .deviceRGB,
                                         bytesPerRow: 0, bitsPerPixel: 0),
           let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else {
-        throw NSError(domain: "AirFolder.Artwork", code: 1)
+        throw NSError(domain: "AimDrop.Artwork", code: 1)
     }
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = graphics
@@ -22,7 +23,7 @@ func png(size: Int, draw: () -> Void) throws -> Data {
     draw()
     NSGraphicsContext.restoreGraphicsState()
     guard let data = bitmap.representation(using: .png, properties: [:]) else {
-        throw NSError(domain: "AirFolder.Artwork", code: 2)
+        throw NSError(domain: "AimDrop.Artwork", code: 2)
     }
     return data
 }
@@ -33,45 +34,39 @@ NSApp.setActivationPolicy(.prohibited)
 let source = URL(fileURLWithPath: CommandLine.arguments[1])
 let output = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
 guard let mark = NSImage(contentsOf: source), mark.isValid else { fatalError("Cannot decode the supplied SVG") }
-let whiteMark = NSImage(size: mark.size, flipped: false) { rect in
-    mark.draw(in: rect)
-    color(0xF3FBFF).setFill()
-    rect.fill(using: .sourceAtop)
-    return true
-}
-
 func drawIcon() {
     let tile = NSBezierPath(roundedRect: NSRect(x: 82, y: 82, width: 860, height: 860), xRadius: 190, yRadius: 190)
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
-    shadow.shadowColor = color(0x0C479D).withAlphaComponent(0.24)
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
     shadow.shadowBlurRadius = 22
     shadow.shadowOffset = NSSize(width: 0, height: -9)
     shadow.set()
-    color(0x1876E8).setFill()
+    color(0xF7F7F7).setFill()
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    NSGradient(colorsAndLocations: (color(0x0C479D), 0), (color(0x1876E8), 0.42),
-               (color(0x2CBDF1), 1))!.draw(in: tile, angle: 65)
-    NSColor.white.withAlphaComponent(0.24).setStroke()
+    NSColor.white.withAlphaComponent(0.8).setStroke()
     tile.lineWidth = 2
     tile.stroke()
 
     let width: CGFloat = 690
     let height = width * mark.size.height / mark.size.width
     let rect = NSRect(x: (1024 - width) / 2, y: (1024 - height) / 2 + 6, width: width, height: height)
-    NSGraphicsContext.saveGraphicsState()
-    let relief = NSShadow()
-    relief.shadowColor = color(0x0C479D).withAlphaComponent(0.20)
-    relief.shadowBlurRadius = 9
-    relief.shadowOffset = NSSize(width: 0, height: -5)
-    relief.set()
-    whiteMark.draw(in: rect)
-    NSGraphicsContext.restoreGraphicsState()
+    mark.draw(in: rect)
 }
 
-let iconset = output.appendingPathComponent("AirFolder.iconset", isDirectory: true)
+func drawAvatar() {
+    // The contact image has its own circular canvas, without the macOS icon tile.
+    NSColor.white.setFill()
+    NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: 1024, height: 1024)).fill()
+    let width: CGFloat = 710
+    let height = width * mark.size.height / mark.size.width
+    mark.draw(in: NSRect(x: (1024 - width) / 2, y: (1024 - height) / 2 + 8,
+                        width: width, height: height))
+}
+
+let iconset = output.appendingPathComponent("AimDrop.iconset", isDirectory: true)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 for points in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
@@ -80,7 +75,8 @@ for points in [16, 32, 128, 256, 512] {
             .write(to: iconset.appendingPathComponent("icon_\(points)x\(points)\(suffix).png"))
     }
 }
-try png(size: 1024, draw: drawIcon).write(to: output.appendingPathComponent("AirFolder.png"))
+try png(size: 1024, draw: drawIcon).write(to: output.appendingPathComponent("AimDrop.png"))
+try png(size: 1024, draw: drawAvatar).write(to: output.appendingPathComponent("AimDropAvatar.png"))
 // Export the exact same vector as a template PDF for crisp menu-bar drawing.
 let pdf = NSMutableData()
 var box = CGRect(x: 0, y: 0, width: mark.size.width, height: mark.size.height)
@@ -94,5 +90,5 @@ mark.draw(in: box)
 NSGraphicsContext.restoreGraphicsState()
 context.endPDFPage()
 context.closePDF()
-try (pdf as Data).write(to: output.appendingPathComponent("AirFolderStatus.pdf"))
-print("Rendered AirFolder icon and menu-bar template from \(source.lastPathComponent)")
+try (pdf as Data).write(to: output.appendingPathComponent("AimDropStatus.pdf"))
+print("Rendered AimDrop icon and menu-bar template from \(source.lastPathComponent)")

@@ -17,7 +17,7 @@ import Cocoa
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         var commands: [[String: Any]] = []
-        let preferences = AppPreferences(completionSound: false)
+        let preferences = AppPreferences(completionSound: false, language: .polish)
         func makeApp() -> AppDelegate {
             let app = AppDelegate()
             app.prepareForChecks(defaults: defaults, preferences: preferences, storageDirectory: root, reservePicker: false) {

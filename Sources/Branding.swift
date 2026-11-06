@@ -1,19 +1,21 @@
 import Cocoa
 
-enum AirFolderArtwork {
+enum AimDropArtwork {
     static func menuBarIcon() -> NSImage? {
-        let image = Bundle.main.url(forResource: "AirFolderStatus", withExtension: "pdf")
+        let image = Bundle.main.url(forResource: "AimDropStatus", withExtension: "pdf")
             .flatMap { NSImage(contentsOf: $0) }
-            ?? NSImage(systemSymbolName: "folder", accessibilityDescription: "AirFolder")
-        image?.size = NSSize(width: 22, height: 22 * 96 / 131.6)
+            ?? NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "AimDrop")
+        if let image, image.size.width > 0 {
+            image.size = NSSize(width: 20, height: 20 * image.size.height / image.size.width)
+        }
         image?.isTemplate = true
-        image?.accessibilityDescription = "AirFolder"
+        image?.accessibilityDescription = "AimDrop"
         return image
     }
 
     static let applicationIcon: NSImage? = {
-        Bundle.main.url(forResource: "AirFolder", withExtension: "icns")
+        Bundle.main.url(forResource: "AimDrop", withExtension: "icns")
             .flatMap { NSImage(contentsOf: $0) }
-            ?? NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "AirFolder")
+            ?? NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "AimDrop")
     }()
 }

@@ -73,7 +73,7 @@ AFPairVerify *AFCreatePairVerify(BOOL server, NSData *(^sign)(NSData *), BOOL (^
     [session.engine setDispatchQueue:session.queue];
     [session.engine setFlags:0x400000];
     [session.engine setSessionType:server ? 4 : 3];
-    [session.engine setLabel:@"AirFolderPairVerify"];
+    [session.engine setLabel:@"AimDropPairVerify"];
     [session.engine setSignDataHandler:^NSData *(uint32_t flags, NSData *data, NSError **error) {
         (void)flags;
         NSData *signature = sign(data);

@@ -61,16 +61,16 @@ final class PairingState: @unchecked Sendable {
     var files: NativeFileService?
 
     init(loopback: Bool, directory: URL? = nil, artwork: URL? = nil, customAvatar: URL? = nil, expectedAvatarDigest: String? = nil,
-         name: String = "AirFolder Logo Test", onPIN: ((String) -> Void)? = nil,
+         name: String = "AimDrop Logo Test", onPIN: ((String) -> Void)? = nil,
          onPaired: (() -> Void)? = nil) throws {
         self.loopback = loopback
         self.name = name; self.onPIN = onPIN; self.onPaired = onPaired
         // Validate the complete image before creating or modifying identity.
-        let baseline = try ReceiverAvatar.defaultLogo(at: artwork ?? URL(fileURLWithPath: ".build/artwork/AirFolder.png"))
+        let baseline = try ReceiverAvatar.defaultLogo(at: artwork ?? URL(fileURLWithPath: ".build/artwork/AimDropAvatar.png"))
         avatar = try customAvatar.map { try ReceiverAvatar.read(at: $0) } ?? baseline
         guard expectedAvatarDigest == nil || expectedAvatarDigest == avatar.digest else { throw ProbeError.invalidArgument }
         store = try PairingStore(directory: directory ?? ProcessInfo.processInfo.environment["AIRFOLDER_PAIRING_STATE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) },
-                                 name: name, avatarDigest: avatar.digest, defaultAvatarDigest: baseline.digest)
+                                 name: name, avatarDigest: avatar.digest)
         let stored = store.snapshot()
         key = try Curve25519.Signing.PrivateKey(rawRepresentation: stored.signingSeed)
     }
@@ -138,7 +138,7 @@ final class PairingState: @unchecked Sendable {
     static func show(pin: String? = nil) {
         if panel == nil {
             let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 190), styleMask: [.titled], backing: .buffered, defer: false)
-            window.title = "AirFolder — test ikony"
+            window.title = "AimDrop — test ikony"
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             let heading = NSTextField(labelWithString: "")
@@ -158,7 +158,7 @@ final class PairingState: @unchecked Sendable {
         }
         heading?.stringValue = pin == nil ? "Odbiornik testowy jest aktywny" : "Wpisz ten kod na iPhonie"
         detail?.font = pin == nil ? .systemFont(ofSize: 18, weight: .medium) : .monospacedDigitSystemFont(ofSize: 40, weight: .semibold)
-        detail?.stringValue = pin ?? "AirFolder Logo Test"
+        detail?.stringValue = pin ?? "AimDrop Logo Test"
         NSApplication.shared.activate(ignoringOtherApps: true)
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
@@ -334,12 +334,12 @@ func runServer(loopback: Bool) async throws {
         "at": authTag.map { String(format: "%02x", $0) }.joined(),
         "sid": state.serverID,
         "sn": loopback ? "pl.airfolder.protocolprobe" : "com.apple.sharingd.AirDrop",
-        "dnm": "AirFolder Logo Test"
+        "dnm": "AimDrop Logo Test"
     ])
     var systems: [NWActorSystem] = []
     var actors: [RPPairingDistributedActor] = []
     for (prePair, type) in [(true, "_appSvcPrePair._tcp"), (false, "_applicationServicePairing._tcp")] {
-        let service = NWListener.Service(name: "AirFolder-" + state.serverID, type: type, txtRecord: txt)
+        let service = NWListener.Service(name: "AimDrop-" + state.serverID, type: type, txtRecord: txt)
         let system = NWActorSystem(service: service, parameters: try serverParameters(state: state, prePair: prePair))
         let actor = RPPairingDistributedActor(state: state, authenticated: !prePair, actorSystem: system)
         try await system.publishAndWaitForReady(actor)
@@ -373,7 +373,7 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
         exit(1)
     } catch { print("unauthenticated_identity_request=rejected") }
     let clientID = UUID().uuidString
-    let serverID = try await prePair.exchangePAKEIdentities(clientIdentity: clientID, deviceName: "AirFolder Loopback Client", givenName: nil, familyName: nil)
+    let serverID = try await prePair.exchangePAKEIdentities(clientIdentity: clientID, deviceName: "AimDrop Loopback Client", givenName: nil, familyName: nil)
     print("prepair_client_exchange=ok")
     guard var pin = readLine(), pin.count == 6 else { throw ProbeError.invalidArgument }
     if wrongPIN {
@@ -398,7 +398,7 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
     let own = try PairingState(loopback: true)
     let expectedImage = try ProcessInfo.processInfo.environment["AIRFOLDER_EXPECTED_AVATAR"].map { try ReceiverAvatar.read(at: URL(fileURLWithPath: $0)).png } ?? own.image
     guard let identity = identities?.first,
-          identity.deviceName == ProcessInfo.processInfo.environment["AIRFOLDER_EXPECTED_NAME"] ?? "AirFolder Logo Test",
+          identity.deviceName == ProcessInfo.processInfo.environment["AIRFOLDER_EXPECTED_NAME"] ?? "AimDrop Logo Test",
           identity.contactImageData == expectedImage else { throw ProbeError.unavailable }
     try own.store.enroll(identities!)
     print("dynamic_pake_logo_exchange=ok bytes=\(own.image.count)")
@@ -458,7 +458,7 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
                     let plistHeaders = ["content-type": "application/x-apple-binary-plist"]
                     let data = try await post("/Discover", PropertyListSerialization.data(fromPropertyList: [:], format: .binary, options: 0), headers: plistHeaders)
                     guard let discovery = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                          discovery["ReceiverComputerName"] as? String == "AirFolder Logo Test",
+                          discovery["ReceiverComputerName"] as? String == "AimDrop Logo Test",
                           discovery["ReceiverMediaCapabilities"] is Data else { throw ProbeError.stage("forwarded discovery plist") }
                     print("native_http3_discover_check=ok")
                     if args.first == "--native-transfer-check" || args.first == "--native-cancel-check" {

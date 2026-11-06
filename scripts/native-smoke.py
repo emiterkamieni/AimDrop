@@ -36,10 +36,11 @@ class Worker:
         self.log = self.log_path.open('w')
         config = plistlib.loads((bundle / 'Info.plist').read_bytes())
         arguments = [
-            config['AFPythonExecutable'], '-I', '-B', '-u', str(bundle / 'Resources/receiver/main.py'),
+            str(bundle / 'Resources' / config['AFPythonExecutable']) if not Path(config['AFPythonExecutable']).is_absolute() else config['AFPythonExecutable'],
+            '-I', '-B', '-u', str(bundle / 'Resources/receiver/main.py'),
             '--state-dir', str(root / 'state'), '--name=' + name,
-            '--native-helper', str(bundle / 'MacOS/AirFolderReceiver'),
-            '--native-artwork', str(bundle / 'Resources/AirFolder.png'), '--native-loopback',
+            '--native-helper', str(bundle / 'MacOS/AimDropReceiver'),
+            '--native-artwork', str(bundle / 'Resources/AimDropAvatar.png'), '--native-loopback',
         ]
         if avatar is not None:
             arguments += ['--native-avatar', str(avatar)]
@@ -85,7 +86,7 @@ class Worker:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--app', type=Path, default=ROOT / 'dist/AirFolder.app')
+    parser.add_argument('--app', type=Path, default=ROOT / 'dist/AimDrop.app')
     bundle = parser.parse_args().app.resolve() / 'Contents'
     prototype = ROOT / '.build/airfolder-pairing-prototype'
     with tempfile.TemporaryDirectory(prefix='bundled-native-', dir=ROOT / '.build') as temp:
@@ -93,9 +94,10 @@ def main():
         fixture = root / 'avatar-fixtures'
         avatar_checks = root / 'avatar-checks'
         subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(ROOT / 'Sources/ReceiverAvatar.swift'),
+                        str(ROOT / 'Sources/Localization.swift'),
                         str(ROOT / 'tests/AvatarChecks.swift'), '-o', str(avatar_checks)], check=True)
-        subprocess.run([str(avatar_checks), str(fixture), str(bundle / 'Resources/AirFolder.png')], cwd=ROOT, check=True)
-        name = 'AirFolder — kontrola paczki'
+        subprocess.run([str(avatar_checks), str(fixture), str(bundle / 'Resources/AimDropAvatar.png')], cwd=ROOT, check=True)
+        name = 'AimDrop — kontrola paczki'
         client_env = {**os.environ, 'AIRFOLDER_PAIRING_STATE_DIR': str(root / 'client'), 'AIRFOLDER_EXPECTED_NAME': name}
         worker = Worker(bundle, root, name)
         def reconnect(ready, transfer=False):
@@ -125,22 +127,38 @@ def main():
                         client.kill(); client.wait()
             first_pin = enroll()
             state_path = root / 'state/Pairing/identity.json'
-            # The real installed v3 state has no avatar field. Upgrading with
-            # the default logo must preserve every identity/peer field.
+            # v3 had no avatar fingerprint; v4 recorded the old AirFolder logo.
+            # Both must rotate once when the bundled artwork becomes AimDrop.
             v4 = json.loads(state_path.read_bytes())
             default_digest = v4['presentedAvatarDigest']
-            worker.close()
-            v3 = dict(v4, version=3); v3.pop('presentedAvatarDigest')
-            state_path.write_text(json.dumps(v3))
-            worker = Worker(bundle, root, name)
-            ready = worker.event('ready')
-            migrated = json.loads(state_path.read_bytes())
-            assert migrated == dict(v3, version=4, presentedAvatarDigest=default_digest), 'Default upgrade reset existing pairing'
-            reconnect(ready)
-            assert 'prepair_exchange=ready' not in worker.log_path.read_text()
+            # Fingerprint verified from the original 0.6.5 AirFolder.png.
+            legacy_digest = '4f97e97b45d51c2a0c65a11c8d92cda8e9861d3e8bd4d0f9f008cc1ec9e4355e'
+            assert default_digest != legacy_digest, 'Old branding still bundled'
+            for version in (3, 4):
+                legacy = dict(json.loads(state_path.read_bytes()), version=version)
+                worker.close()
+                if version == 3:
+                    legacy.pop('presentedAvatarDigest')
+                else:
+                    legacy['presentedAvatarDigest'] = legacy_digest
+                state_path.write_text(json.dumps(legacy))
+                worker = Worker(bundle, root, name)
+                ready = worker.event('ready')
+                migrated_bytes = state_path.read_bytes()
+                migrated = json.loads(migrated_bytes)
+                assert migrated['version'] == 4 and migrated['presentedAvatarDigest'] == default_digest
+                assert migrated['presentedName'] == name and not migrated['peers']
+                for field in ('signingSeed', 'serverID', 'deviceID', 'irk'):
+                    assert migrated[field] != legacy[field], 'Branding upgrade retained old identity'
+                worker.close()
+                worker = Worker(bundle, root, name)
+                ready = worker.event('ready')
+                assert state_path.read_bytes() == migrated_bytes, 'Branding upgrade repeated on restart'
+                enroll()
+                reconnect(ready)
             before_rename = json.loads(state_path.read_bytes())
             # Name changes reach both the native identity and the Python backend.
-            name = 'AirFolder — nowa nazwa'
+            name = 'AimDrop — nowa nazwa'
             client_env['AIRFOLDER_EXPECTED_NAME'] = name
             request_id = str(uuid.uuid4())
             worker.send(dict(command='set_name', request_id=request_id, name=name))
@@ -182,7 +200,7 @@ def main():
             profile(invalid, digests['avatar_digest'], expected=False)
             assert state_path.read_bytes() == before_bad, 'Invalid artwork modified pairing'
             # Combined name/avatar edit goes through a single profile operation.
-            name = 'AirFolder — profil z awatarem'; client_env['AIRFOLDER_EXPECTED_NAME'] = name
+            name = 'AimDrop — profil z awatarem'; client_env['AIRFOLDER_EXPECTED_NAME'] = name
             assert profile(avatar, digests['avatar_digest'])['pairing_reset']
             changed = state_path.read_bytes()
             assert profile(avatar, digests['avatar_digest'])['pairing_reset'] is False
@@ -254,7 +272,7 @@ def main():
             worker.close()
             worker = Worker(bundle, root, name)
             worker.close()  # UI EOF during native startup
-            print('PASS: bundled profile IPC, v3 migration without re-pairing, name/avatar reset + exact PNG donation, metadata/path equality, custom-avatar restart, invalid PNG rejection without key changes, logo restore, PairVerify + h3/SHA-256, durable backlog, child lifecycle')
+            print('PASS: bundled profile IPC, v3/v4 logo migration with one-time pairing reset, name/avatar reset + exact PNG donation, metadata/path equality, custom-avatar restart, invalid PNG rejection without key changes, logo restore, PairVerify + h3/SHA-256, durable backlog, child lifecycle')
         finally:
             worker.close()
 

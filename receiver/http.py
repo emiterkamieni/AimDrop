@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .archive import ArchiveError, ContainerDecoder, ODCParser
 from .configuration import normalized_receiver_name
 from .layout import SelectionLayout
+from .localization import error_message, message, text
 from .media import LEGACY_CAPABILITIES
 from .sessions import Refused
 
@@ -29,7 +30,7 @@ def exact(stream, length):
     while len(data) < length:
         part = stream.read(length - len(data))
         if not part:
-            raise HTTPError("Połączenie przerwano w środku danych.")
+            raise HTTPError(message("The connection was interrupted while receiving data.", "Połączenie przerwano w środku danych."))
         data.extend(part)
     return bytes(data)
 
@@ -59,17 +60,17 @@ class Body:
         encodings = headers.get_all("Transfer-Encoding", [])
         lengths = headers.get_all("Content-Length", [])
         if len(encodings) > 1 or len(lengths) > 1 or (encodings and lengths):
-            raise HTTPError("Niejednoznaczny rozmiar żądania.")
+            raise HTTPError(message("Ambiguous request size.", "Niejednoznaczny rozmiar żądania."))
         self.chunked = bool(encodings)
         if self.chunked:
             if encodings[0].strip().lower() != "chunked":
-                raise HTTPError("Nieobsługiwany sposób przesyłania danych.")
+                raise HTTPError(message("Unsupported transfer encoding.", "Nieobsługiwany sposób przesyłania danych."))
         else:
             if not lengths or not lengths[0].strip().isdigit():
-                raise HTTPError("Brak poprawnego rozmiaru żądania.")
+                raise HTTPError(message("A valid request size is missing.", "Brak poprawnego rozmiaru żądania."))
             self.remaining = int(lengths[0])
             if self.remaining > limit:
-                raise HTTPError("Przesyłka przekracza dostępny limit miejsca.")
+                raise HTTPError(message("The transfer exceeds the available space limit.", "Przesyłka przekracza dostępny limit miejsca."))
 
     def read(self):
         if self.finished:
@@ -77,20 +78,20 @@ class Body:
         if self.chunked and self.remaining == 0:
             line = self.stream.readline(1025)
             if not line.endswith(b"\r\n") or len(line) > 1024:
-                raise HTTPError("Nieprawidłowy nagłówek fragmentu danych.")
+                raise HTTPError(message("Invalid data chunk header.", "Nieprawidłowy nagłówek fragmentu danych."))
             number = line[:-2].split(b";", 1)[0]
             if not number or any(char not in b"0123456789abcdefABCDEF" for char in number):
-                raise HTTPError("Nieprawidłowy rozmiar fragmentu danych.")
+                raise HTTPError(message("Invalid data chunk size.", "Nieprawidłowy rozmiar fragmentu danych."))
             self.remaining = int(number, 16)
             if self.remaining > self.limit - self.total:
-                raise HTTPError("Przesyłka przekracza dostępny limit miejsca.")
+                raise HTTPError(message("The transfer exceeds the available space limit.", "Przesyłka przekracza dostępny limit miejsca."))
             if self.remaining == 0:
                 trailer_bytes = 0
                 while True:
                     trailer = self.stream.readline(8193)
                     trailer_bytes += len(trailer)
                     if not trailer.endswith(b"\r\n") or trailer_bytes > 8192:
-                        raise HTTPError("Nieprawidłowe zakończenie żądania.")
+                        raise HTTPError(message("Invalid request ending.", "Nieprawidłowe zakończenie żądania."))
                     if trailer == b"\r\n":
                         break
                 self.finished = True
@@ -103,7 +104,7 @@ class Body:
         self.total += len(data)
         if self.chunked and self.remaining == 0:
             if exact(self.stream, 2) != b"\r\n":
-                raise HTTPError("Nieprawidłowy separator fragmentu danych.")
+                raise HTTPError(message("Invalid data chunk separator.", "Nieprawidłowy separator fragmentu danych."))
         return data
 
 
@@ -238,7 +239,7 @@ class ReceiverServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "AirFolder/0.4.0"
+    server_version = "AimDrop/0.8.0"
     sys_version = ""
     timeout = 30
 
@@ -264,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
         expect = self.headers.get("Expect", "").lower()
         if expect:
             if expect != "100-continue":
-                raise HTTPError("Nieobsługiwany nagłówek Expect.")
+                raise HTTPError(message("Unsupported Expect header.", "Nieobsługiwany nagłówek Expect."))
             self.send_response_only(100)
             self.end_headers()
             self.wfile.flush()
@@ -283,9 +284,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = plistlib.loads(data)
         except Exception as error:
-            raise HTTPError("Nieprawidłowe metadane AirDrop.") from error
+            raise HTTPError(message("Invalid AirDrop metadata.", "Nieprawidłowe metadane AirDrop.")) from error
         if not isinstance(result, dict):
-            raise HTTPError("Nieprawidłowe metadane AirDrop.")
+            raise HTTPError(message("Invalid AirDrop metadata.", "Nieprawidłowe metadane AirDrop."))
         LOG.info("Metadata %s: bytes=%d read_ms=%.1f parse_ms=%.1f", self.path, len(data),
                  (body_finished - started) * 1000, (perf_counter() - body_finished) * 1000)
         return result
@@ -346,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         ids = self.headers.get_all("TransferID", [])
         if len(ids) != 1:
-            raise Refused("Nieprawidłowy identyfikator transferu.")
+            raise Refused(message("Invalid transfer identifier.", "Nieprawidłowy identyfikator transferu."))
         offer = self.server.claim_upload(ids[0], self.client_address, self.connection)
         directory = None
         parser = None
@@ -364,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
             decoder = ContainerDecoder(parser, content_type)
             with self.server.sessions.lock:
                 if offer.canceled.is_set():
-                    raise ArchiveError("Odbieranie anulowano.")
+                    raise ArchiveError(message("Receiving canceled.", "Odbieranie anulowano."))
                 self.continue_if_requested()
                 LOG.info("Upload ready (%s)", content_type)
                 self.server.emit("receiving", id=offer.id, bytes=0, total_bytes=total_bytes,
@@ -373,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
             last_progress = None
             while not decoder.done or body.remaining:
                 if offer.canceled.is_set():
-                    raise ArchiveError("Odbieranie anulowano.")
+                    raise ArchiveError(message("Receiving canceled.", "Odbieranie anulowano."))
                 chunk = body.read()
                 if not chunk:
                     break
@@ -384,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
                 if last_progress is None or now - last_progress >= 0.1 or (decoder.done and not body.remaining):
                     with self.server.sessions.lock:
                         if offer.canceled.is_set():
-                            raise ArchiveError("Odbieranie anulowano.")
+                            raise ArchiveError(message("Receiving canceled.", "Odbieranie anulowano."))
                         self.server.emit("progress", id=offer.id, bytes=body.total,
                                          total_bytes=total_bytes, total_files=total_files,
                                          decoded_bytes=decoder.decoded_bytes,
@@ -398,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
             # durable ready job into a canceled/failed transfer.
             with self.server.sessions.lock:
                 if offer.canceled.is_set():
-                    raise ArchiveError("Odbieranie anulowano.")
+                    raise ArchiveError(message("Receiving canceled.", "Odbieranie anulowano."))
                 directory.publish()
                 paths = [str(path) for path in directory.published]
                 if self.server.inbox:
@@ -421,10 +422,10 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 LOG.warning("Upload failed (%s): %s", type(error).__name__, error)
                 if not success:
-                    detail = str(error)
+                    detail = error_message(error)
                     if directory and directory.published:
-                        detail += " Część plików została zapisana w wybranym folderze."
-                    self.server.emit("error", id=offer.id, message="Nie udało się odebrać przesyłki. " + detail)
+                        detail += " " + text("Some files have been saved in the selected folder.", "Część plików została zapisana w wybranym folderze.")
+                    self.server.emit("error", id=offer.id, message=str(message("Could not receive the transfer. %s", "Nie udało się odebrać przesyłki. %s", detail)))
                 try:
                     self.reply(500, close=True)
                 except OSError:

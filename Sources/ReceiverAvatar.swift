@@ -11,8 +11,8 @@ enum AvatarError: LocalizedError {
     case invalidImage, missingDefault
     var errorDescription: String? {
         switch self {
-        case .invalidImage: return "Nie można odczytać tego obrazu. Wybierz zdjęcie PNG, JPEG lub HEIC."
-        case .missingDefault: return "Brak domyślnego awatara w zasobach AirFolder."
+        case .invalidImage: return L10n.text("Cannot read this image. Choose a PNG, JPEG or HEIC photo.", "Nie można odczytać tego obrazu. Wybierz zdjęcie PNG, JPEG lub HEIC.")
+        case .missingDefault: return L10n.text("The default avatar is missing from AimDrop's resources.", "Brak domyślnego awatara w zasobach AimDrop.")
         }
     }
 }
@@ -72,6 +72,8 @@ struct ReceiverAvatar: Equatable {
         guard CGImageSourceGetStatus(source) == .statusComplete,
               CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete else { throw AvatarError.invalidImage }
         guard let pixels = context.data else { throw AvatarError.invalidImage }
+        // Stable fingerprint namespace: rebranding must not change the digest
+        // of a user's unchanged custom avatar.
         var fingerprint = Data("AirFolderAvatar-rgba8-srgb-256-v1\0".utf8)
         fingerprint.append(Data(bytes: pixels, count: 256 * 256 * 4))
         self.png = png

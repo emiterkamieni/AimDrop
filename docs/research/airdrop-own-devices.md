@@ -1,5 +1,10 @@
 # „Osoby” / „Moje urządzenia” — sprawdzenie 2026-11-06
 
+Historical implementation notes; current usage is documented in the [README](../../README.md).
+
+> Dokument zachowuje nazwy używane w historycznych próbach. Od 0.7.0 aplikacja
+> nazywa się AimDrop i korzysta ze znaku `aimdrop-icon.svg`.
+
 ## Decyzja końcowa
 
 Po zapoznaniu się z wynikami użytkownik wybrał pozostanie przy osobnym odbiorniku

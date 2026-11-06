@@ -28,14 +28,15 @@ final class PairingStore: @unchecked Sendable {
     }
     private let lock = NSLock()
     private var state: State
-    private let defaultAvatarDigest: String
+    // v3 donated the original AirFolder logo and did not store its fingerprint.
+    // Use that historical image, not whichever logo the current app bundles.
+    private static let legacyAvatarDigest = "4f97e97b45d51c2a0c65a11c8d92cda8e9861d3e8bd4d0f9f008cc1ec9e4355e"
     private var directoryFD: Int32 = -1
     private var lockFD: Int32 = -1
     private static let filename = "identity.json"
     private static let maximumBytes = 1024 * 1024
 
-    init(directory: URL?, name: String, avatarDigest: String, defaultAvatarDigest: String) throws {
-        self.defaultAvatarDigest = defaultAvatarDigest
+    init(directory: URL?, name: String, avatarDigest: String) throws {
         // Initialize before calling instance I/O helpers; replace this value
         // only after a complete decode and validation when a file exists.
         state = State(signingSeed: Data(), serverID: "", deviceID: "", irk: Data(), dateAdded: Date(), peers: [])
@@ -84,11 +85,10 @@ final class PairingStore: @unchecked Sendable {
     }
     @discardableResult func updatePresentation(name: String, avatarDigest: String) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
-        let previousAvatar = state.presentedAvatarDigest ?? defaultAvatarDigest
+        let previousAvatar = state.presentedAvatarDigest ?? Self.legacyAvatarDigest
         if state.version >= 3, state.presentedName == name, previousAvatar == avatarDigest {
             if state.version < 4 {
-                // v3 always donated the bundled logo. Record its fingerprint
-                // without replacing PAJONK's identity or enrolled peer keys.
+                // Preserve keys only when the historical name/image really match.
                 var migrated = state
                 migrated.version = 4
                 migrated.presentedAvatarDigest = avatarDigest

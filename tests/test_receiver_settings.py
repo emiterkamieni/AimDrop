@@ -11,11 +11,17 @@ import unittest
 import uuid
 
 from receiver.configuration import normalized_receiver_name
+from receiver.localization import configure, language_code
 from tests.fixtures import archive, request
 from tests.test_buffered_flow import ROOT, Worker
 
 
 class ReceiverNameValidationTests(unittest.TestCase):
+    def setUp(self):
+        previous = language_code()
+        configure("pl")  # These assertions intentionally exercise the original Polish messages.
+        self.addCleanup(configure, previous)
+
     def test_unicode_nfc_and_only_ascii_edge_spaces_are_normalized(self):
         cases = [
             ("  Z\u0307o\u0301łw — 👩\u200d💻  ", "Żółw — 👩\u200d💻"),
@@ -69,7 +75,7 @@ class ReceiverSettingsWorkerTests(unittest.TestCase):
         self.addCleanup(self.log.close)
 
     def start_worker(self, setup=None):
-        worker = Worker(self.root / "state", self.log, setup=setup)
+        worker = Worker(self.root / "state", self.log, setup="sys.argv += ['--language', 'pl']\n" + (setup or ""))
         self.addCleanup(worker.close)
         worker.event("pending")
         return worker
@@ -106,7 +112,7 @@ class ReceiverSettingsWorkerTests(unittest.TestCase):
                 state = self.root / ("invalid-%d" % index)
                 result = subprocess.run([
                     sys.executable, "-I", "-B", "-u", str(ROOT / "receiver/main.py"),
-                    "--state-dir", str(state), "--no-advertise", "--name", name,
+                    "--state-dir", str(state), "--no-advertise", "--language", "pl", "--name", name,
                 ], input="", capture_output=True, text=True, timeout=10)
                 self.assertNotEqual(result.returncode, 0)
                 failure = json.loads(result.stdout)

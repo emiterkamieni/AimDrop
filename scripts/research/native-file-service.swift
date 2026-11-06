@@ -303,7 +303,7 @@ final class HTTP3BackendRequest: @unchecked Sendable {
             }
             var data = data ?? Data()
             if ["/Discover", "/Ask"].contains(path), var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
-                plist["ReceiverComputerName"] = self.identity?.deviceName ?? "AirFolder Logo Test"
+                plist["ReceiverComputerName"] = self.identity?.deviceName ?? "AimDrop Logo Test"
                 if path == "/Discover", let identity = self.identity {
                     plist["ReceiverDeviceIRKData"] = identity.deviceIRKData
                     plist["ReceiverEdPKData"] = identity.devicePublicKey

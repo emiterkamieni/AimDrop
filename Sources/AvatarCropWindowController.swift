@@ -52,7 +52,11 @@ private final class AvatarCropView: NSView {
 final class AvatarCropWindowController: NSWindowController {
     private let cropView: AvatarCropView
     private let zoom = NSSlider(value: 1, minValue: 1, maxValue: 4, target: nil, action: nil)
-    private let message = NSTextField(wrappingLabelWithString: "Przeciągnij zdjęcie, aby ustawić kadr.")
+    private let message = NSTextField(wrappingLabelWithString: "")
+    private let zoomLabel = NSTextField(labelWithString: "")
+    private let cancelButton = NSButton()
+    private let useButton = NSButton()
+    private var cropError: Error?
     private var completion: ((ReceiverAvatar?) -> Void)?
     private var selected: ReceiverAvatar?
 
@@ -60,7 +64,6 @@ final class AvatarCropWindowController: NSWindowController {
         cropView = AvatarCropView(image: image)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 430),
                               styleMask: [.titled], backing: .buffered, defer: false)
-        window.title = "Dopasuj awatar"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         let stack = NSStackView()
@@ -69,16 +72,14 @@ final class AvatarCropWindowController: NSWindowController {
         window.contentView?.addSubview(stack)
         zoom.target = self; zoom.action = #selector(zoomChanged)
         zoom.isContinuous = true
-        zoom.setAccessibilityLabel("Przybliżenie awatara")
         message.alignment = .center; message.font = .systemFont(ofSize: 12); message.textColor = .secondaryLabelColor
-        let label = NSTextField(labelWithString: "Przybliżenie")
-        label.font = .systemFont(ofSize: 12)
-        let zoomRow = NSStackView(views: [label, zoom]); zoomRow.spacing = 12
-        let cancel = NSButton(title: "Anuluj", target: self, action: #selector(cancel))
-        cancel.keyEquivalent = "\u{1b}"; cancel.bezelStyle = .rounded
-        let use = NSButton(title: "Użyj awatara", target: self, action: #selector(accept))
-        use.keyEquivalent = "\r"; use.bezelStyle = .rounded
-        let buttons = NSStackView(views: [cancel, use]); buttons.spacing = 8
+        zoomLabel.font = .systemFont(ofSize: 12)
+        let zoomRow = NSStackView(views: [zoomLabel, zoom]); zoomRow.spacing = 12
+        cancelButton.target = self; cancelButton.action = #selector(cancel)
+        cancelButton.keyEquivalent = "\u{1b}"; cancelButton.bezelStyle = .rounded
+        useButton.target = self; useButton.action = #selector(accept)
+        useButton.keyEquivalent = "\r"; useButton.bezelStyle = .rounded
+        let buttons = NSStackView(views: [cancelButton, useButton]); buttons.spacing = 8
         for view in [cropView, message, zoomRow, buttons] { stack.addArrangedSubview(view) }
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 12),
@@ -86,8 +87,19 @@ final class AvatarCropWindowController: NSWindowController {
             cropView.widthAnchor.constraint(equalToConstant: 280), cropView.heightAnchor.constraint(equalToConstant: 280),
             message.widthAnchor.constraint(equalToConstant: 352), zoomRow.widthAnchor.constraint(equalToConstant: 320)
         ])
+        refreshLocalization()
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshLocalization), name: L10n.didChangeNotification, object: nil)
     }
+    deinit { NotificationCenter.default.removeObserver(self) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc func refreshLocalization() {
+        window?.title = L10n.text("Adjust avatar", "Dopasuj awatar")
+        zoom.setAccessibilityLabel(L10n.text("Avatar zoom", "Przybliżenie awatara"))
+        zoomLabel.stringValue = L10n.text("Zoom", "Przybliżenie")
+        cancelButton.title = L10n.text("Cancel", "Anuluj")
+        useButton.title = L10n.text("Use avatar", "Użyj awatara")
+        message.stringValue = cropError?.localizedDescription ?? L10n.text("Drag the photo to adjust the crop.", "Przeciągnij zdjęcie, aby ustawić kadr.")
+    }
     func present(on parent: NSWindow, completion: @escaping (ReceiverAvatar?) -> Void) {
         self.completion = completion
         guard let window else { completion(nil); return }
@@ -101,7 +113,7 @@ final class AvatarCropWindowController: NSWindowController {
     @objc private func cancel() { finish() }
     @objc private func accept() {
         do { selected = try cropView.crop.avatar(); finish() }
-        catch { message.stringValue = error.localizedDescription; message.textColor = .systemRed }
+        catch { cropError = error; refreshLocalization(); message.textColor = .systemRed }
     }
     private func finish() {
         guard let window else { return }

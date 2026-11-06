@@ -21,18 +21,21 @@ from tests.fixtures import archive, dvzip, request
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--app", type=Path, default=ROOT / "dist/AirFolder.app")
+    parser.add_argument("--app", type=Path, default=ROOT / "dist/AimDrop.app")
     bundle = parser.parse_args().app.resolve() / "Contents"
     config = plistlib.loads((bundle / "Info.plist").read_bytes())
+    python = Path(config["AFPythonExecutable"])
+    if not python.is_absolute():
+        python = bundle / "Resources" / python
     with tempfile.TemporaryDirectory(prefix="airfrajer-smoke-") as temp:
         temp = Path(temp)
         destination = temp / "chosen"
         destination.mkdir()
         with (temp / "worker.log").open("w+") as log:
             process = subprocess.Popen([
-                config["AFPythonExecutable"], "-I", "-B", "-u",
+                str(python), "-I", "-B", "-u",
                 str(bundle / "Resources/receiver/main.py"), "--state-dir", str(temp / "state"),
-                "--no-advertise", "--name", "AirFolder IPC test",
+                "--no-advertise", "--name", "AimDrop IPC test",
             ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
             events = queue.Queue()
             def read_events():
@@ -65,14 +68,14 @@ def main():
                 response = discover.getresponse()
                 assert response.status == 200, "Discover failed"
                 discovery = plistlib.loads(response.read())
-                assert discovery["ReceiverComputerName"] == "AirFolder IPC test"
+                assert discovery["ReceiverComputerName"] == "AimDrop IPC test"
                 assert discovery["ReceiverModelName"] != "OpenDrop"
                 capabilities = discovery["ReceiverMediaCapabilities"]
                 assert isinstance(capabilities, bytes), "Media capabilities must be a plist data value"
                 assert json.loads(capabilities) == json.loads((bundle / "Resources/media-capabilities.json").read_bytes())
                 discover.close()
                 rename_id = str(uuid.uuid4())
-                receiver_name = "AirFolder — kontrola IPC"
+                receiver_name = "AimDrop — kontrola IPC"
                 command({"command": "set_name", "request_id": rename_id, "name": receiver_name})
                 renamed = event("name_result")
                 assert renamed["request_id"] == rename_id and renamed["ok"] and renamed["name"] == receiver_name

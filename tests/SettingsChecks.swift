@@ -9,6 +9,7 @@ struct SettingsChecks {
     }
 
     static func main() throws {
+        L10n.configure(.polish)
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
@@ -29,7 +30,7 @@ struct SettingsChecks {
         var folder = root.appendingPathComponent("Destination")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var preferences = AppPreferences(receiverName: "Studio 📥", automaticSave: true,
-                                         destination: try SaveDestination(url: folder), completionSound: false)
+                                         destination: try SaveDestination(url: folder), completionSound: false, language: .polish)
         try store.save(preferences)
         precondition(PreferencesStore(defaults: defaults).load() == preferences, "All settings must survive a fresh store instance")
         var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(preferences)) as! [String: Any]

@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .archive import ReceiveDirectory, quarantine_file
+from .localization import message
 
 
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -29,7 +30,7 @@ def _walk(fd, names, prefix=()):
         entry = os.stat(name, dir_fd=fd, follow_symlinks=False)
         parts = prefix + (name,)
         if not (stat.S_ISREG(entry.st_mode) or stat.S_ISDIR(entry.st_mode)):
-            raise ValueError("Bufor zawiera dowiązanie lub nieobsługiwany typ pliku.")
+            raise ValueError(message("The buffer contains a symbolic link or an unsupported file type.", "Bufor zawiera dowiązanie lub nieobsługiwany typ pliku."))
         yield fd, parts, entry
         if stat.S_ISDIR(entry.st_mode):
             child = os.open(name, DIRECTORY_FLAGS, dir_fd=fd)
@@ -67,7 +68,7 @@ class Inbox:
         ident = str(uuid.UUID(ident))
         job = self.root / ident
         if job.is_symlink():
-            raise ValueError("Folder bufora nie może być dowiązaniem.")
+            raise ValueError(message("The buffer folder cannot be a symbolic link.", "Folder bufora nie może być dowiązaniem."))
         with self._guard:
             lock = self._locks.setdefault(ident, threading.RLock())
         return job, lock
@@ -75,12 +76,12 @@ class Inbox:
     @staticmethod
     def _info(job, count, files):
         if type(count) is not int or count < 0 or not isinstance(files, list) or not files:
-            raise ValueError("Nieprawidłowe metadane bufora.")
+            raise ValueError(message("Invalid buffer metadata.", "Nieprawidłowe metadane bufora."))
         if any(not isinstance(name, str) or name in ("", ".", "..")
                or Path(name).name != name or "\0" in name for name in files):
-            raise ValueError("Nieprawidłowa nazwa w buforze.")
+            raise ValueError(message("Invalid name in the buffer.", "Nieprawidłowa nazwa w buforze."))
         if len(set(files)) != len(files):
-            raise ValueError("Powtórzona ścieżka w metadanych bufora.")
+            raise ValueError(message("Duplicate path in the buffer metadata.", "Powtórzona ścieżka w metadanych bufora."))
         return dict(id=job.name, count=count, files=files,
                     paths=[str(job / "payload" / name) for name in files])
 
@@ -103,10 +104,10 @@ class Inbox:
         job, lock = self._job(id)
         with lock:
             if os.path.lexists(job / "ready.json"):
-                raise FileExistsError("Przesyłka jest już gotowa do zapisania.")
+                raise FileExistsError(message("The transfer is already ready to save.", "Przesyłka jest już gotowa do zapisania."))
             paths = [Path(os.path.abspath(path)) for path in paths]
             if any(path.parent != job / "payload" for path in paths):
-                raise ValueError("Ścieżka wychodzi poza bufor przesyłki.")
+                raise ValueError(message("The path is outside the transfer buffer.", "Ścieżka wychodzi poza bufor przesyłki."))
             info = self._info(job, count, [path.name for path in paths])
             fd = os.open(job / "payload", DIRECTORY_FLAGS)
             try:
@@ -202,7 +203,7 @@ class Inbox:
             destination = Path(destination).resolve(strict=True)
             # samefile also catches alternate casing on case-insensitive Mac volumes.
             if any(parent.samefile(self.root) for parent in (destination, *destination.parents)):
-                raise ValueError("Nie można zapisywać plików wewnątrz bufora odbioru.")
+                raise ValueError(message("Files cannot be saved inside the receive buffer.", "Nie można zapisywać plików wewnątrz bufora odbioru."))
             directory = ReceiveDirectory(destination)
             try:
                 fd = os.open(job / "payload", DIRECTORY_FLAGS)
@@ -211,7 +212,7 @@ class Inbox:
                              if stat.S_ISREG(entry.st_mode)]
                     status = dict(bytes=0, total_bytes=sum(sizes), files_received=0, total_files=len(sizes))
                     if status["total_bytes"] > directory.limit:
-                        raise OSError("Za mało miejsca w wybranym folderze.")
+                        raise OSError(message("There is not enough space in the selected folder.", "Za mało miejsca w wybranym folderze."))
 
                     def report():
                         if progress is not None:
@@ -229,7 +230,7 @@ class Inbox:
                             if (not stat.S_ISREG(actual.st_mode)
                                     or (actual.st_dev, actual.st_ino, actual.st_size)
                                     != (entry.st_dev, entry.st_ino, entry.st_size)):
-                                raise ValueError("Plik w buforze został zmieniony.")
+                                raise ValueError(message("A file in the buffer has been changed.", "Plik w buforze został zmieniony."))
                             with directory.open_file(parts) as target:
                                 quarantine_file(target.fileno())
                                 while True:
@@ -255,8 +256,8 @@ class Inbox:
                 (job / "ready.json").unlink()
             except Exception as error:
                 if directory.published:
-                    raise RuntimeError("%s; już zapisane pliki: %s" %
-                                       (error, ", ".join(str(path) for path in directory.published))) from error
+                    raise RuntimeError(message("%s; files already saved: %s", "%s; już zapisane pliki: %s",
+                                               error, ", ".join(str(path) for path in directory.published))) from error
                 raise
             finally:
                 directory.close()

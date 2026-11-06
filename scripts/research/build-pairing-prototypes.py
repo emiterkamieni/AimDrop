@@ -15,6 +15,7 @@ for name in ['actor-loopback-probe', 'airfolder-pairing-prototype']:
     extra = [f'{SOURCE}/{file}.swift' for file in ['native-file-service', 'streaming-upload', 'pair-verify', 'pairing-store', 'pair-verify-client-check']] if name == 'airfolder-pairing-prototype' else []
     if name == 'airfolder-pairing-prototype':
         extra.append('Sources/ReceiverAvatar.swift')
+        extra.append('Sources/Localization.swift')
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-name', 'rapportd',
         '-target', 'arm64-apple-macos14.0', '-I', '.build/research-modules',
         '-module-cache-path', '.build/research-module-cache', '-import-objc-header',

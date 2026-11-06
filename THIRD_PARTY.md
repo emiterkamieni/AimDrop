@@ -1,6 +1,6 @@
 # Protocol research and attribution
 
-AirFolder is an independent experimental receiver, not an Apple product.
+AimDrop is an independent experimental receiver, not an Apple product.
 
 The AirDrop wire format and macOS socket configuration were informed by:
 
@@ -27,14 +27,16 @@ The AirDrop wire format and macOS socket configuration were informed by:
   https://github.com/furiousMAC/continuity/blob/master/messages/proximity_pairing.md
 
 In particular, the iOS 26 work documents chunked metadata requests, dvzip blocks,
-TransferID correlation and the upload end-of-stream handshake. AirFolder has its
+TransferID correlation and the upload end-of-stream handshake. AimDrop has its
 own consent coordinator, streaming archive reader and native AppKit interface.
 It does not include upstream's automatic acceptance or partial-file salvage.
 
-AirFolder's source is released under GPL-3.0-only. The full license is in LICENSE.
+AimDrop's source is released under GPL-3.0-only. The full license is in LICENSE.
 Runtime dependencies are Python's standard library and system macOS frameworks.
-The local build records the Python executable used to build it in Info.plist;
-Python itself is not bundled or redistributed by this prototype.
+Development builds can use the Python interpreter used for the build. Portable
+releases bundle a pinned CPython runtime from astral-sh/python-build-standalone,
+including its original licenses and upstream dependency/source notices.
+See docs/distribution.md and Contents/Resources/python/licenses in the release.
 
 The local build optionally queries the installed PhotosFormats framework for
 media capabilities. Only its Version, Codecs and ContainerFormats tables are
@@ -43,5 +45,7 @@ reported HEVC and HEIF support for this filtered payload identically to the
 full native payload; its legacy profile reported neither. This is not proof
 that a particular iPhone transfer skips all preparation or conversion.
 
-The AirFolder mark in docs/airfolder_znak.svg was supplied by the user. The icon
-renderer preserves its geometry and adds the app's blue/turquoise background.
+The AimDrop mark in docs/aimdrop-icon.svg was supplied by the user. The icon
+renderer preserves its black geometry and adds a light, rounded app-icon tile.
+The receiver avatar uses a separate circular image without that tile.
+The previous user-supplied AirFolder mark is preserved in the project's version history.

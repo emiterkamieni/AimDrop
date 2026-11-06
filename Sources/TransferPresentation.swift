@@ -36,20 +36,36 @@ struct TransferProgress {
     }
 
     var text: String {
-        let received = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        let received = Self.byteCount(bytes)
         var parts: [String]
         if let total = totalBytes, total > 0 {
-            let size = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-            parts = ["\(saving ? "Zapisano" : "Odebrano") \(received) z \(size)"]
+            let size = Self.byteCount(total)
+            parts = [saving ? L10n.format("Saved %@ of %@", "Zapisano %@ z %@", received, size)
+                            : L10n.format("Received %@ of %@", "Odebrano %@ z %@", received, size)]
         } else {
-            parts = ["\(saving ? "Zapisano" : "Odebrano") \(received)"]
+            parts = [saving ? L10n.format("Saved %@", "Zapisano %@", received)
+                            : L10n.format("Received %@", "Odebrano %@", received)]
         }
         if let total = totalFiles, completedFiles <= total {
-            parts.append("\(completedFiles) z \(total) plików")
+            parts.append(L10n.plural("progress.files", count: total,
+                                     total == 1 ? "%ld of %ld file" : "%ld of %ld files",
+                                     total == 1 ? "%ld z %ld pliku" : "%ld z %ld plików", completedFiles, total))
         } else if completedFiles > 0 {
-            parts.append("ukończono pliki: \(completedFiles)")
+            parts.append(L10n.format("Completed: %@", "Ukończono: %@", TransferSummary.files(completedFiles)))
         }
         return parts.joined(separator: " · ")
+    }
+
+    private static func byteCount(_ bytes: Int64) -> String {
+        // ByteCountFormatter uses the system locale, even with a manual app language.
+        let units = ["B", "kB", "MB", "GB", "TB", "PB", "EB"]
+        var value = Double(max(0, bytes)), unit = 0
+        while value >= 1000 && unit < units.count - 1 { value /= 1000; unit += 1 }
+        let formatter = NumberFormatter()
+        formatter.locale = L10n.locale
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = unit == 0 ? 0 : (value < 10 ? 2 : 1)
+        return (formatter.string(from: NSNumber(value: value)) ?? String(value)) + " " + units[unit]
     }
 }
 
@@ -93,6 +109,19 @@ enum TransferSummary {
         return "\(count) \(word)"
     }
 
+    static func files(_ count: Int) -> String {
+        L10n.plural("files", count: count, count == 1 ? "%ld file" : "%ld files",
+                    polishTemplate(count, "%ld plik", "%ld pliki", "%ld plików"), count)
+    }
+
+    private static func polishTemplate(_ count: Int, _ one: String, _ few: String, _ many: String) -> String {
+        switch L10n.pluralCategory(count, language: .polish) {
+        case "one": return one
+        case "few": return few
+        default: return many
+        }
+    }
+
     static func describe(names: [String], folders: Set<String> = [], fallbackCount: Int = 0) -> String {
         describe(kinds: names.map { folders.contains($0) ? .folder : kind(name: $0) }, fallbackCount: fallbackCount)
     }
@@ -113,10 +142,13 @@ enum TransferSummary {
         }
         if kinds.isEmpty { files = fallbackCount }
         var parts: [String] = []
-        if images > 0 { parts.append(noun(images, "zdjęcie", "zdjęcia", "zdjęć")) }
-        if videos > 0 { parts.append("\(videos) wideo") }
-        if folders > 0 { parts.append(noun(folders, "folder", "foldery", "folderów")) }
-        if files > 0 { parts.append(noun(files, "plik", "pliki", "plików")) }
-        return parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " i " + parts.last! : (parts.first ?? "pliki")
+        if images > 0 { parts.append(L10n.plural("photos", count: images, images == 1 ? "%ld photo" : "%ld photos",
+            polishTemplate(images, "%ld zdjęcie", "%ld zdjęcia", "%ld zdjęć"), images)) }
+        if videos > 0 { parts.append(L10n.plural("videos", count: videos, videos == 1 ? "%ld video" : "%ld videos", "%ld wideo", videos)) }
+        if folders > 0 { parts.append(L10n.plural("folders", count: folders, folders == 1 ? "%ld folder" : "%ld folders",
+            polishTemplate(folders, "%ld folder", "%ld foldery", "%ld folderów"), folders)) }
+        if files > 0 { parts.append(Self.files(files)) }
+        return parts.count > 1 ? parts.dropLast().joined(separator: ", ") + L10n.text(" and ", " i ") + parts.last!
+            : (parts.first ?? L10n.text("files", "pliki"))
     }
 }

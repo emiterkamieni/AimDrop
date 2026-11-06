@@ -35,7 +35,7 @@ sec_identity_t AFCreatePrePairIdentity(void) {
     typedef SecIdentityRef (*CreateIdentity)(CFStringRef);
     CreateIdentity create = (CreateIdentity)dlsym(library, "_CFHTTPServerCreateSelfSignedIdentity");
     if (!create) return nil;
-    SecIdentityRef identity = create(CFSTR("AirFolderPairingProbe"));
+    SecIdentityRef identity = create(CFSTR("AimDropPairingProbe"));
     if (!identity) return nil;
     sec_identity_t result = sec_identity_create(identity);
     CFRelease(identity);
