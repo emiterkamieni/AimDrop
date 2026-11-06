@@ -10,14 +10,67 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import uuid
 
 from tests.fixtures import archive, request
+from tests.test_buffered_flow import Worker
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkerLifecycleTests(unittest.TestCase):
+    def test_ready_and_tls_discover_do_not_require_reverse_dns(self):
+        setup = '''
+import socket
+def unavailable_resolver(*args, **kwargs):
+    raise AssertionError("worker startup attempted hostname resolution")
+socket.getfqdn = unavailable_resolver
+socket.gethostbyaddr = unavailable_resolver
+'''
+        with tempfile.TemporaryDirectory(prefix="airfrajer-worker-dns-") as name:
+            root = Path(name)
+            with (root / "worker.log").open("w") as log:
+                worker = Worker(root / "state", log, setup=setup)
+                try:
+                    worker.event("pending")
+                    status, data = worker.post("/Discover", plistlib.dumps({}))
+                    self.assertEqual(status, 200)
+                    self.assertEqual(plistlib.loads(data)["ReceiverComputerName"], "AimDrop")
+                finally:
+                    worker.close()
+                self.assertEqual(worker.process.returncode, 0)
+
+    def test_startup_failure_reports_phase_and_reaps_child(self):
+        setup = '''
+from receiver import main
+def failed_model_probe():
+    raise RuntimeError("controlled hardware model failure")
+main.hardware_model = failed_model_probe
+'''
+        spawned = []
+        popen = subprocess.Popen
+        def spawn(*args, **kwargs):
+            process = popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        with tempfile.TemporaryDirectory(prefix="airfrajer-worker-failure-") as name:
+            root = Path(name)
+            with (root / "worker.log").open("w") as log, \
+                    mock.patch("tests.test_buffered_flow.subprocess.Popen", side_effect=spawn):
+                with self.assertRaises(AssertionError) as error:
+                    Worker(root / "state", log, setup=setup)
+            detail = str(error.exception)
+            self.assertIn("Worker exited waiting for ready", detail)
+            self.assertIn("Receiver startup: hardware model", detail)
+            self.assertIn("controlled hardware model failure", detail)
+            self.assertNotIn("Receiver startup: HTTPS listener", detail)
+            self.assertEqual(len(spawned), 1)
+            self.assertIsNotNone(spawned[0].returncode)
+            self.assertTrue(spawned[0].stdin.closed)
+            self.assertTrue(spawned[0].stdout.closed)
+
     def test_ui_eof_during_upload_cleans_partial_files(self):
         with tempfile.TemporaryDirectory(prefix="airfrajer-worker-") as name:
             root = Path(name)

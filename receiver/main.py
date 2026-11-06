@@ -199,11 +199,15 @@ def main():
     inbox = None if args.manual_consent else Inbox(args.state_dir / "Incoming")
     sessions = Sessions(emit, prepare_destination=inbox.prepare if inbox else None,
                         abandon_destination=inbox.abandon if inbox else None)
+    LOG.info("Receiver startup: TLS identity")
     instance, context = identity(args.state_dir)
+    media_capabilities = load_capabilities(Path(__file__).resolve().parent.parent / "media-capabilities.json")
+    LOG.info("Receiver startup: hardware model")
+    model = hardware_model()
+    LOG.info("Receiver startup: HTTPS listener")
     server = ReceiverServer(("::1" if args.no_advertise or args.native_helper else "::", args.port),
                             context, sessions, emit, args.name, darwin=sys.platform == "darwin", inbox=inbox,
-                            media_capabilities=load_capabilities(Path(__file__).resolve().parent.parent / "media-capabilities.json"),
-                            model=hardware_model())
+                            media_capabilities=media_capabilities, model=model)
     server_thread = threading.Thread(target=server.serve_forever, name="https", daemon=True)
     server_thread.start()
     advert = None

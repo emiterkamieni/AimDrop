@@ -22,6 +22,7 @@ class Worker:
     def __init__(self, state, log, setup=None):
         self.observed = []
         self.events = queue.Queue()
+        self.log_path = Path(log.name)
         entry = [str(ROOT / "receiver/main.py")]
         if setup:
             entry = ["-c", "import sys\nsys.path.insert(0, %r)\n%s\nfrom receiver.main import main\nmain()"
@@ -31,19 +32,39 @@ class Worker:
             "--state-dir", str(state), "--no-advertise",
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
         def read():
-            for line in self.process.stdout:
-                event = json.loads(line)
-                self.observed.append(event)
-                self.events.put(event)
+            try:
+                for line in self.process.stdout:
+                    event = json.loads(line)
+                    self.observed.append(event)
+                    self.events.put(event)
+            finally:
+                self.events.put(None)
         self.reader = threading.Thread(target=read, daemon=True)
         self.reader.start()
-        self.port = self.event("ready")["port"]
+        try:
+            self.port = self.event("ready")["port"]
+        except BaseException:
+            # Constructor failures occur before callers can register cleanup.
+            if self.process.poll() is None:
+                self.process.kill()
+            self.process.wait()
+            self.close()
+            raise
+
+    def failure(self, reason):
+        return AssertionError("%s (worker exit=%s):\n%s" %
+                              (reason, self.process.poll(), self.log_path.read_text()))
 
     def event(self, kind):
         while True:
-            event = self.events.get(timeout=10)
+            try:
+                event = self.events.get(timeout=10)
+            except queue.Empty:
+                raise self.failure("Timed out waiting for " + kind) from None
+            if event is None:
+                raise self.failure("Worker exited waiting for " + kind)
             if event["event"] == "error":
-                raise AssertionError(event["message"])
+                raise self.failure(event["message"])
             if event["event"] == kind:
                 return event
 

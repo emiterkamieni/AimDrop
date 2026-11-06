@@ -7,6 +7,7 @@ import plistlib
 import queue
 import socket
 import ssl
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -59,6 +60,28 @@ class BodyTests(unittest.TestCase):
                     headers["TotalBytes"] = value
                 self.assertEqual(decoded_size_hint(headers, True), expected)
                 self.assertIsNone(decoded_size_hint(headers, False))
+
+
+class ReceiverStartupTests(unittest.TestCase):
+    def test_numeric_listener_binds_without_hostname_resolution(self):
+        # Both the native/fixture loopback backend and the legacy wildcard
+        # listener must start even when the host's reverse resolver is stalled.
+        for host in ("::1", "::"):
+            with self.subTest(host=host), \
+                    mock.patch.object(socket, "getfqdn", side_effect=AssertionError("unexpected DNS lookup")), \
+                    mock.patch.object(socket, "gethostbyaddr", side_effect=AssertionError("unexpected reverse DNS lookup")):
+                server = ReceiverServer((host, 0), None, None, lambda *args, **fields: None,
+                                        "Test", darwin=sys.platform == "darwin")
+                try:
+                    self.assertEqual(server.server_address, server.socket.getsockname())
+                    self.assertEqual(server.server_name, host)
+                    self.assertEqual(server.server_port, server.server_address[1])
+                    self.assertGreater(server.server_port, 0)
+                    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as client:
+                        client.settimeout(2)
+                        client.connect(("::1", server.server_port))
+                finally:
+                    server.server_close()
 
 
 class ReceiverIntegrationTests(unittest.TestCase):

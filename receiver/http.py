@@ -2,6 +2,7 @@
 import logging
 import plistlib
 import socket
+from socketserver import TCPServer
 import ssl
 import threading
 import time
@@ -132,11 +133,20 @@ class ReceiverServer(ThreadingHTTPServer):
         try:
             if darwin:
                 self.socket.setsockopt(socket.SOL_SOCKET, 0x1104, 1)  # SO_RECV_ANYIF
+            LOG.info("HTTPS listener: binding")
             self.server_bind()
             self.server_activate()
+            LOG.info("HTTPS listener: active on port %d", self.server_port)
         except Exception:
             self.server_close()
             raise
+
+    def server_bind(self):
+        # HTTPServer.server_bind calls getfqdn -> gethostbyaddr, which can block
+        # startup on the system resolver even for ::1. AirDrop uses receiver_name
+        # in its protocol; the HTTP server only needs the bound address and port.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     @property
     def receiver_name(self):
