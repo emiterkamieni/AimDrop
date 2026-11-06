@@ -1,0 +1,96 @@
+// Standalone research declarations reconstructed from exports on macOS 26.5.2.
+// Appended to a local copy of the SDK interface; no SDK files are modified.
+import Distributed
+
+@available(macOS 13.0, *)
+extension Network.NWProtocolOptions {
+    public static func fromNW(_ options: nw_protocol_options_t) -> Network.NWProtocolOptions?
+}
+
+@available(macOS 13.0, *)
+extension Network.NWParameters {
+    public convenience init(_ parameters: nw_parameters_t)
+}
+
+@available(macOS 13.0, *)
+extension Network.NWListener {
+    final public var nw: nw_listener_t { get }
+}
+
+@available(macOS 13.0, *)
+extension Network.NWConnection {
+    final public var nw: nw_connection_t { get }
+}
+
+@available(macOS 13.0, *)
+public struct NWActorID: Swift.Hashable, Swift.Codable, Swift.Sendable, Swift.CustomStringConvertible {
+    public var description: Swift.String { get }
+    public var hashValue: Swift.Int { get }
+    public static func == (a: Network.NWActorID, b: Network.NWActorID) -> Swift.Bool
+    public func hash(into hasher: inout Swift.Hasher)
+    public init(from decoder: any Swift.Decoder) throws
+    public func encode(to encoder: any Swift.Encoder) throws
+}
+
+@available(macOS 13.0, *)
+public struct NWActorSystemInvocationEncoder: Distributed.DistributedTargetInvocationEncoder {
+    public typealias SerializationRequirement = Swift.Codable
+    public mutating func recordGenericSubstitution<T>(_ type: T.Type) throws
+    public mutating func recordArgument<T>(_ argument: Distributed.RemoteCallArgument<T>) throws where T: Swift.Codable
+    public mutating func recordErrorType<E>(_ type: E.Type) throws where E: Swift.Error
+    public mutating func recordReturnType<R>(_ type: R.Type) throws where R: Swift.Codable
+    public mutating func doneRecording() throws
+}
+
+@available(macOS 13.0, *)
+public struct NWActorSystemInvocationDecoder: Distributed.DistributedTargetInvocationDecoder {
+    public typealias SerializationRequirement = Swift.Codable
+    public mutating func decodeGenericSubstitutions() throws -> [any Any.Type]
+    public mutating func decodeNextArgument<A>() throws -> A where A: Swift.Codable
+    public mutating func decodeErrorType() throws -> (any Any.Type)?
+    public mutating func decodeReturnType() throws -> (any Any.Type)?
+}
+
+@available(macOS 13.0, *)
+public struct NWActorSystemResultHandler: Distributed.DistributedTargetInvocationResultHandler {
+    public typealias SerializationRequirement = Swift.Codable
+    public func onReturn<R>(value: R) async throws where R: Swift.Codable
+    public func onReturnVoid() async throws
+    public func onThrow<E>(error: E) async throws where E: Swift.Error
+}
+
+@available(macOS 13.0, *)
+public protocol NWSingletonPublishedActor: Distributed.DistributedActor {}
+
+@available(macOS 13.0, *)
+public class NWActorSystem: Distributed.DistributedActorSystem, @unchecked Swift.Sendable {
+    public typealias ActorID = Network.NWActorID
+    public typealias InvocationEncoder = Network.NWActorSystemInvocationEncoder
+    public typealias InvocationDecoder = Network.NWActorSystemInvocationDecoder
+    public typealias ResultHandler = Network.NWActorSystemResultHandler
+    public typealias SerializationRequirement = Swift.Codable
+    public init()
+    public init(parameters: Network.NWParameters)
+    public init(service: Network.NWListener.Service, parameters: Network.NWParameters)
+    public static var `default`: Network.NWActorSystem { get }
+    final public var listener: Network.NWListener? { get }
+    final public var disableCompression: Swift.Bool { get set }
+    final public func resolve<A>(id: Network.NWActorID, as actorType: A.Type) throws -> A? where A: Distributed.DistributedActor, A.ID == Network.NWActorID
+    final public func assignID<A>(_ actorType: A.Type) -> Network.NWActorID where A: Distributed.DistributedActor, A.ID == Network.NWActorID
+    final public func actorReady<A>(_ actor: A) where A: Distributed.DistributedActor, A.ID == Network.NWActorID
+    final public func resignID(_ id: Network.NWActorID)
+    final public func makeInvocationEncoder() -> Network.NWActorSystemInvocationEncoder
+    final public func remoteCall<A, E, R>(on actor: A, target: Distributed.RemoteCallTarget, invocation: inout Network.NWActorSystemInvocationEncoder, throwing: E.Type, returning: R.Type) async throws -> R where A: Distributed.DistributedActor, E: Swift.Error, R: Swift.Codable, A.ID == Network.NWActorID
+    final public func remoteCallVoid<A, E>(on actor: A, target: Distributed.RemoteCallTarget, invocation: inout Network.NWActorSystemInvocationEncoder, throwing: E.Type) async throws where A: Distributed.DistributedActor, E: Swift.Error, A.ID == Network.NWActorID
+    final public func invokeHandlerOnReturn(handler: Network.NWActorSystemResultHandler, resultBuffer: Swift.UnsafeRawPointer, metatype: any Any.Type) async throws
+    final public func publish<A>(_ actor: A) async throws where A: Network.NWSingletonPublishedActor, A.ID == Network.NWActorID
+    final public func publishAndWaitForReady<A>(_ actor: A) async throws where A: Network.NWSingletonPublishedActor, A.ID == Network.NWActorID
+    final public func invalidateActor<A>(_ actor: A) where A: Distributed.DistributedActor, A.ID == Network.NWActorID
+    final public func endpoint<A>(for actor: A) throws -> Network.NWEndpoint where A: Distributed.DistributedActor, A.ActorSystem == Network.NWActorSystem
+    deinit
+}
+
+@available(macOS 13.0, *)
+extension Distributed.DistributedActor where Self.ActorSystem == Network.NWActorSystem {
+    public static func discover(_ endpoint: Network.NWEndpoint, connectionParameters: Network.NWParameters, using system: Network.NWActorSystem, invalidationHandler: ((Swift.Error?) -> Swift.Void)?) throws -> Self
+}
