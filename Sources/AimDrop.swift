@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private lazy var updater = UpdateChecker()
     private var checkingForUpdates = false
     private var updateAlert: NSAlert?
+    private var updatePresentationScreen: NSScreen?
+    private weak var aboutWindow: NSWindow?
     private var updateDownloadURL: URL?
     private var deferredUpdateResult: Result<UpdateCheckResult, Error>?
     private var worker: Process?
@@ -85,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             log("Login item status=\(LoginItemManager.system.status().rawValue)")
             notifications.log = { [weak self] message in self?.log(message) }
             progressBanners.log = { [weak self] message in self?.log(message) }
+            notifications.setUpdateNotificationsEnabled(preferences.updateNotifications)
             notifications.start()
             notifications.onSavePending = { [weak self] id in self?.requestSave(id: id) }
             notifications.onOpenUpdate = { url in NSWorkspace.shared.open(url) }
@@ -98,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             setReceiverStatus("Startup failed", "Błąd uruchamiania")
         }
         updater.onAvailableUpdate = { [weak self] update in
-            guard let self, !self.quitting else { return }
+            guard let self, !self.quitting, self.preferences.updateNotifications else { return }
             self.notifications.updateAvailable(version: update.version, url: update.downloadURL) { [weak self] delivered in
                 if delivered { self?.updater.markNotified(update) }
             }
@@ -334,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 appliedAvatarDigest = pending.digest
                 refreshReceiverName()
                 setSettingsStatus(event["pairing_reset"] as? Bool == true
-                    ? L10n.text("Select the receiver on your iPhone, enter the PIN and reopen AirDrop.", "Wybierz odbiorcę na iPhonie, wpisz PIN i otwórz ponownie AirDrop.")
+                    ? L10n.text("Select the receiver on the sending device, enter the PIN and reopen AirDrop.", "Wybierz odbiorcę na urządzeniu wysyłającym, wpisz PIN i otwórz ponownie AirDrop.")
                     : L10n.text("Settings saved.", "Ustawienia zapisane."))
             } else {
                 setSettingsStatus(L10n.text("Settings were saved locally, but the receiver did not accept them. ", "Ustawienia zapisane lokalnie, ale odbiornik ich nie przyjął. ") + (event["message"] as? String ?? ""), error: true)
@@ -460,7 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem === updateItem { return !checkingForUpdates && updateAlert == nil }
+        if menuItem === updateItem { return !checkingForUpdates && updateAlert == nil && deferredUpdateResult == nil }
         if menuItem === saveLatestItem {
             return latestSavableID != nil && workerReady && panel == nil
                 && settingsWindow?.isChoosingFile != true && errorAlert == nil && updateAlert == nil
@@ -578,6 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         button.action = #selector(closeError)
         errorAlert = alert
         alert.layout()
+        WindowPlacement.center(alert.window)
         NSApp.activate(ignoringOtherApps: true)
         alert.window.makeKeyAndOrderFront(nil)
     }
@@ -600,14 +604,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let controller = SettingsWindowController()
             controller.onSave = { [weak self] value in self?.applyPreferences(value) ?? false }
             controller.canChooseFile = { [weak self] in self?.panel == nil && self?.errorAlert == nil && self?.updateAlert == nil }
-            controller.onCheckForUpdates = { [weak self] in self?.checkForUpdates() }
             controller.onPickerClosed = { [weak self] in
                 DispatchQueue.main.async { [weak self] in self?.presentNextPending() }
             }
             settingsWindow = controller
         }
         settingsWindow?.present(preferences: preferences, status: settingsStatus)
-        settingsWindow?.setCheckingForUpdates(checkingForUpdates)
         if let destination = preferences.destination {
             destinationQueue.async { [weak self] in
                 guard let resolved = try? destination.resolve() else { return }
@@ -621,6 +623,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let avatar = try selectedAvatar(value)
             _ = try materializeAvatar(value, avatar: avatar)
             preferences = try preferenceStore.save(value)
+            notifications.setUpdateNotificationsEnabled(preferences.updateNotifications)
             L10n.configure(preferences.language)
             refreshLanguage()
             synchronizeReceiverProfile()
@@ -725,25 +728,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showAbout() {
+        let screen = WindowPlacement.activeScreen()
         NSApp.activate(ignoringOtherApps: true)
+        if let aboutWindow {
+            WindowPlacement.center(aboutWindow, on: screen)
+            aboutWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        let existingWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        var presented: NSWindow?
+        let observer = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                                              object: nil, queue: .main) { notification in
+            presented = notification.object as? NSWindow
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
         NSApp.orderFrontStandardAboutPanel(nil)
+        // Keep the actual standard panel; never assume that a previous key
+        // window is the About panel when activation is asynchronous.
+        aboutWindow = NSApp.windows.first { !existingWindows.contains(ObjectIdentifier($0)) } ?? presented
+        if let aboutWindow { WindowPlacement.center(aboutWindow, on: screen) }
     }
 
     @objc private func checkForUpdates() {
-        guard !checkingForUpdates else { return }
+        guard !checkingForUpdates, deferredUpdateResult == nil else { return }
         if let alert = updateAlert {
+            WindowPlacement.center(alert.window)
             NSApp.activate(ignoringOtherApps: true)
             alert.window.makeKeyAndOrderFront(nil)
             return
         }
         checkingForUpdates = true
+        updatePresentationScreen = WindowPlacement.activeScreen()
         updateItem.title = L10n.text("Checking…", "Sprawdzanie…")
-        settingsWindow?.setCheckingForUpdates(true)
         updater.checkManually { [weak self] result in
             guard let self, !self.quitting else { return }
             self.checkingForUpdates = false
             self.updateItem.title = L10n.text("Check for Updates…", "Sprawdź aktualizacje…")
-            self.settingsWindow?.setCheckingForUpdates(false)
             self.showUpdateResult(result)
         }
     }
@@ -787,6 +807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         close.action = #selector(closeUpdateAlert)
         updateAlert = alert
         alert.layout()
+        WindowPlacement.center(alert.window, on: updatePresentationScreen)
         NSApp.activate(ignoringOtherApps: true)
         alert.window.makeKeyAndOrderFront(nil)
     }
@@ -800,6 +821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         updateAlert?.window.close()
         updateAlert = nil
         updateDownloadURL = nil
+        updatePresentationScreen = nil
         refreshLatestSaveItem()
         presentNextPending()
     }
@@ -849,13 +871,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var currentFolderIDForChecks: String? { currentOffer }
     func cancelFolderForChecks() { panel?.cancel(nil) }
     func showSettingsForChecks() -> SettingsWindowController { showSettings(); return settingsWindow! }
-    func updateResultForChecks(_ result: Result<UpdateCheckResult, Error>) { showUpdateResult(result) }
+    func updateResultForChecks(_ result: Result<UpdateCheckResult, Error>, on screen: NSScreen? = nil) {
+        updatePresentationScreen = screen
+        showUpdateResult(result)
+    }
     var updateAlertForChecks: NSAlert? { updateAlert }
+    var updateItemForChecks: NSMenuItem { updateItem }
     func dismissUpdateForChecks() { closeUpdateAlert() }
+    func showAboutForChecks() -> NSWindow? { showAbout(); return aboutWindow }
     func closeForChecks() {
         progressBanners.closeAll()
         settingsWindow?.close()
         updateAlert?.window.close()
+        aboutWindow?.close()
         panel = nil
         NSStatusBar.system.removeStatusItem(statusItem)
     }

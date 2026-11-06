@@ -205,7 +205,7 @@ private final class ProgressCardView: NSView {
 
     func update(_ progress: TransferProgress) {
         detail.stringValue = progress.text
-        detail.toolTip = progress.estimated ? L10n.text("Estimated progress based on the archive size reported by your iPhone.", "Szacowany postęp według rozmiaru archiwum podanego przez iPhone'a.") : progress.text
+        detail.toolTip = progress.estimated ? L10n.text("Estimated progress based on the archive size reported by the sender.", "Szacowany postęp według rozmiaru archiwum podanego przez nadawcę.") : progress.text
         bar.setAccessibilityLabel(progress.estimated ? L10n.text("Estimated transfer progress", "Szacowany postęp przesyłania") : L10n.text("Transfer progress", "Postęp przesyłania"))
         bar.setFraction(progress.fraction)
     }

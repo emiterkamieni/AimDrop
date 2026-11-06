@@ -2,7 +2,12 @@ import Cocoa
 import UserNotifications
 
 final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
-    private let center = UNUserNotificationCenter.current()
+    typealias Add = (UNNotificationRequest, @escaping (Error?) -> Void) -> Void
+
+    private lazy var center = UNUserNotificationCenter.current()
+    private let add: Add
+    private let removePending: ([String]) -> Void
+    private let removeDelivered: ([String]) -> Void
     private let queue = DispatchQueue(label: "pl.airfrajer.notifications")
     private let category = "AIRFRAJER_RECEIVED"
     private let revealAction = "REVEAL_FILES"
@@ -10,7 +15,12 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
     private let pendingCategory = "AIRFRAJER_BUFFERED"
     private let saveAction = "SAVE_BUFFERED"
     private let updateCategory = "AIMDROP_UPDATE_AVAILABLE"
+    private let updateIdentifier = "aimdrop.update.available"
+    private let updateSession = UUID().uuidString
     private let downloadAction = "DOWNLOAD_UPDATE"
+    // Policy, generations and delivery state are owned by queue.
+    private var updateNotificationsEnabled = true
+    private var updateGeneration: UInt64 = 0
     private var deliveries: [String: Delivery] = [:]
     private var order: [String] = []
     private var delivering = false
@@ -21,6 +31,31 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
     private struct Delivery {
         let content: UNMutableNotificationContent?  // nil removes a destination reminder
         let completion: ((Bool) -> Void)?
+        let updateGeneration: UInt64?
+    }
+
+    init(add: Add? = nil, removePending: (([String]) -> Void)? = nil,
+         removeDelivered: (([String]) -> Void)? = nil) {
+        self.add = add ?? { request, completion in
+            UNUserNotificationCenter.current().add(request, withCompletionHandler: completion)
+        }
+        self.removePending = removePending ?? { UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: $0) }
+        self.removeDelivered = removeDelivered ?? { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: $0) }
+        super.init()
+    }
+
+    func setUpdateNotificationsEnabled(_ enabled: Bool) {
+        queue.sync {
+            self.updateNotificationsEnabled = enabled
+            guard !enabled else { return }
+            self.updateGeneration &+= 1
+            if let rejected = self.deliveries.removeValue(forKey: self.updateIdentifier) {
+                self.complete(rejected, accepted: false)
+            }
+            self.order.removeAll { $0 == self.updateIdentifier }
+            // Do not wait for an in-flight add before removing an existing banner.
+            self.removeNotification(id: self.updateIdentifier)
+        }
     }
 
     func start() {
@@ -75,14 +110,19 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func updateAvailable(version: String, url: URL, completion: @escaping (Bool) -> Void) {
-        guard Self.isUpdateURL(url) else { completion(false); return }
         queue.async {
+            guard self.updateNotificationsEnabled, Self.isUpdateURL(url) else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
             let content = UNMutableNotificationContent()
             content.title = L10n.format("AimDrop %@", "AimDrop %@", version)
             content.body = L10n.text("Update available.", "Dostępna aktualizacja.")
             content.categoryIdentifier = self.updateCategory
-            content.userInfo = ["updateURL": url.absoluteString]
-            self.enqueue(id: "aimdrop.update.available", content: content, completion: completion)
+            content.userInfo = ["updateURL": url.absoluteString, "updateSession": self.updateSession,
+                                "updateGeneration": String(self.updateGeneration)]
+            self.enqueue(id: self.updateIdentifier, content: content, completion: completion,
+                         updateGeneration: self.updateGeneration)
         }
     }
 
@@ -93,34 +133,63 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     // Serialize add/remove acknowledgements so a late destination reminder
     // cannot survive a successful save.
-    private func enqueue(id: String, content: UNMutableNotificationContent?, completion: ((Bool) -> Void)? = nil) {
+    private func enqueue(id: String, content: UNMutableNotificationContent?, completion: ((Bool) -> Void)? = nil,
+                         updateGeneration: UInt64? = nil) {
         if deliveries[id] == nil { order.append(id) }
-        if let replaced = deliveries[id]?.completion { DispatchQueue.main.async { replaced(false) } }
-        deliveries[id] = Delivery(content: content, completion: completion)
+        if let replaced = deliveries[id] { complete(replaced, accepted: false) }
+        deliveries[id] = Delivery(content: content, completion: completion, updateGeneration: updateGeneration)
         deliverNext()
+    }
+
+    private func isCurrent(_ delivery: Delivery) -> Bool {
+        guard let generation = delivery.updateGeneration else { return true }
+        return updateNotificationsEnabled && generation == updateGeneration
+    }
+
+    private func complete(_ delivery: Delivery, accepted: Bool) {
+        guard let completion = delivery.completion else { return }
+        DispatchQueue.main.async {
+            // A preference change can overtake an acknowledgement already queued on main.
+            let current = self.queue.sync { self.isCurrent(delivery) }
+            completion(accepted && current)
+        }
+    }
+
+    private func removeNotification(id: String) {
+        removePending([id])
+        removeDelivered([id])
     }
 
     private func deliverNext() {
         guard !delivering, !order.isEmpty else { return }
         let id = order.removeFirst()
         guard let delivery = deliveries.removeValue(forKey: id) else { deliverNext(); return }
+        guard isCurrent(delivery) else {
+            complete(delivery, accepted: false)
+            deliverNext()
+            return
+        }
         guard let content = delivery.content else {
-            center.removePendingNotificationRequests(withIdentifiers: [id])
-            center.removeDeliveredNotifications(withIdentifiers: [id])
+            removeNotification(id: id)
             deliverNext()
             return
         }
         delivering = true
-        center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { [weak self] error in
+        add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { [weak self] error in
             guard let self = self else { return }
             self.queue.async {
-                if let error = error {
+                let current = self.isCurrent(delivery)
+                if !current {
+                    // A late add may recreate the removed update. Clean up before the
+                    // next delivery, which can reuse this ID after OFF → ON.
+                    self.removeNotification(id: id)
+                } else if let error = error {
                     self.log?("Notification delivery failed: \(error.localizedDescription)")
                 } else {
                     let kind = content.categoryIdentifier == self.pendingCategory ? "destination" : (content.categoryIdentifier == self.updateCategory ? "update" : "completion")
                     self.log?("Notification accepted by macOS: \(kind)")
                 }
-                if let completion = delivery.completion { DispatchQueue.main.async { completion(error == nil) } }
+                self.complete(delivery, accepted: error == nil && current)
                 self.delivering = false
                 self.deliverNext()
             }
@@ -129,7 +198,20 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
+        completionHandler(presentationOptions(for: notification.request.content))
+    }
+
+    func presentationOptions(for content: UNNotificationContent) -> UNNotificationPresentationOptions {
+        if content.categoryIdentifier == updateCategory {
+            let allowed = queue.sync {
+                guard self.updateNotificationsEnabled else { return false }
+                // Older builds/processes have no generation in this session.
+                guard content.userInfo["updateSession"] as? String == self.updateSession else { return true }
+                return content.userInfo["updateGeneration"] as? String == String(self.updateGeneration)
+            }
+            if !allowed { return [] }
+        }
+        return [.banner, .list, .sound]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

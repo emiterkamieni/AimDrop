@@ -47,7 +47,7 @@ From the repository root:
 python3 scripts/package.py --prepare-runtime
 
 # Build, sign, verify, and archive the app. Use its current source version.
-python3 scripts/package.py --version 0.8.1
+python3 scripts/package.py --version 0.8.2
 ```
 
 `--version` is an assertion against `CFBundleShortVersionString`; it does not
@@ -55,7 +55,7 @@ change the version. Omit it to use the built app's version automatically.
 Outputs are:
 
 ```text
-dist/AimDrop-0.8.1-macos-arm64.zip
+dist/AimDrop-0.8.2-macos-arm64.zip
 dist/SHA256SUMS
 ```
 

@@ -56,7 +56,7 @@ def main():
     if catalogs.exists():
         shutil.rmtree(catalogs)
     shutil.copytree(ROOT / "Resources/Localizations", catalogs)
-    purpose = "AimDrop receives the files you choose to share with AirDrop from your iPhone."
+    purpose = "AimDrop receives the files you choose to share with AirDrop from your Apple devices."
     for catalog in catalogs.glob("*.json"):
         translated = json.loads(catalog.read_text(encoding="utf-8"))
         localized = RESOURCES / (catalog.stem + ".lproj")
@@ -95,14 +95,14 @@ def main():
             "CFBundleExecutable": "AimDrop",
             "CFBundleIconFile": "AimDrop.icns",
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "0.8.1",
-            "CFBundleVersion": "21",
+            "CFBundleShortVersionString": "0.8.2",
+            "CFBundleVersion": "22",
             "CFBundleDevelopmentRegion": "en",
             "CFBundleLocalizations": ["en", "pl", "de", "fr", "es", "it", "pt", "nl", "sv", "cs", "uk", "ja", "ko", "zh-Hans", "zh-Hant"],
             "LSMinimumSystemVersion": "26.0",
             "LSUIElement": True,
             "NSHighResolutionCapable": True,
-            "NSLocalNetworkUsageDescription": "AimDrop receives the files you choose to share with AirDrop from your iPhone.",
+            "NSLocalNetworkUsageDescription": "AimDrop receives the files you choose to share with AirDrop from your Apple devices.",
             "NSBonjourServices": ["_appSvcPrePair._tcp", "_applicationServicePairing._tcp", "_asquic._udp"],
             "AFPythonExecutable": "python/bin/python3" if args.bundled_python else str(pathlib.Path(sys.executable).resolve()),
         }, stream)

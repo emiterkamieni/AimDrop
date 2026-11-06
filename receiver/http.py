@@ -249,7 +249,7 @@ class ReceiverServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "AimDrop/0.8.1"
+    server_version = "AimDrop/0.8.2"
     sys_version = ""
     timeout = 30
 

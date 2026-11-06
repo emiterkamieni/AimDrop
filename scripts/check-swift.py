@@ -8,7 +8,7 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKS = ["LocalizationChecks", "UpdateChecks", "AvatarChecks", "SettingsChecks", "LoginItemChecks",
+CHECKS = ["LocalizationChecks", "UpdateChecks", "NotificationChecks", "WindowPlacementChecks", "AvatarChecks", "SettingsChecks", "LoginItemChecks",
           "LatestSaveChecks", "SettingsLanguageChecks", "ProgressModel", "ProgressResponsiveness", "ProgressPreview"]
 
 
@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--only", nargs="+", choices=CHECKS)
     args = parser.parse_args()
     resources = args.app.resolve() / "Contents/Resources"
+    product_info = plistlib.loads((resources.parent / "Info.plist").read_bytes())
     if not (resources / "AimDropAvatar.png").is_file():
         parser.error("Build the current app first, or pass --app with the staged app path")
     sources = [str(path) for path in sorted((ROOT / "Sources").glob("*.swift")) if path.name != "main.swift"]
@@ -37,7 +38,8 @@ def main():
         (contents / "Info.plist").write_bytes(plistlib.dumps({
             "CFBundleName": "AimDrop Checks", "CFBundleIdentifier": "pl.aimdrop.checks." + name.lower(),
             "CFBundleExecutable": name, "CFBundlePackageType": "APPL", "CFBundleIconFile": "AimDrop.icns",
-            "CFBundleShortVersionString": "0.8.0", "LSUIElement": True,
+            "CFBundleShortVersionString": product_info["CFBundleShortVersionString"],
+            "CFBundleVersion": product_info["CFBundleVersion"], "LSUIElement": True,
         }))
         subprocess.run(["xcrun", "swiftc", "-D", "AIRFOLDER_CHECKS", "-parse-as-library",
                         "-framework", "Cocoa", "-framework", "UserNotifications", "-framework", "QuickLookThumbnailing",

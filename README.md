@@ -6,8 +6,8 @@
 
 **Receive AirDrop files on your Mac. Choose where they go.**
 
-AimDrop lives in the macOS menu bar and appears as a receiver in your iPhone's
-standard **Share → AirDrop** sheet. Files arrive in a persistent inbox before you
+AimDrop lives in the macOS menu bar and appears as a receiver in AirDrop on your
+Apple devices, including iPhone, iPad and Mac. Files arrive in a persistent inbox before you
 choose a destination, so dismissing the folder picker never discards a transfer.
 
 **[Download for Apple Silicon](https://github.com/emiterkamieni/AimDrop/releases/latest)**
@@ -24,15 +24,18 @@ choose a destination, so dismissing the folder picker never discards a transfer.
 - **Remembered PIN pairing** with a fresh PIN when you change the receiver name or avatar.
 - **Launch at login**, managed through macOS login items.
 - **15 languages**, selected automatically from your system preferences or manually in Settings.
-- **GitHub update checks** every 24 hours, a manual check, and a download notification for a newer release.
+- **GitHub update checks** every 24 hours, a manual menu action, and optional new-version notifications.
 
-<img src="docs/images/settings.png" width="600" alt="AimDrop settings with a circular avatar, save destination, language and update controls">
+<img src="docs/images/settings.png" width="560" alt="AimDrop settings with a circular avatar, save options, language and notification preferences">
 
 ## Requirements
 
 - An **Apple Silicon Mac running macOS 26 or later**.
-- An iPhone with AirDrop. Device interoperability has been tested with **iOS 26.6.1 and macOS 26.5.2**.
+- A sending Apple device with AirDrop, such as an iPhone, iPad or another Mac.
 - Local-network access enabled for AimDrop.
+
+Device interoperability has been verified with an iPhone running **iOS 26.6.1**
+and a receiving Mac running **macOS 26.5.2**.
 
 Release ZIPs include their own Python runtime. Python, Homebrew and developer
 tools are needed only when building from source.
@@ -50,7 +53,8 @@ See [distribution details](docs/distribution.md) for checksums, signing and rele
 
 ## Receive your first transfer
 
-1. On your iPhone, select files and open **Share → AirDrop → AimDrop**.
+1. On the sending Apple device, select files and choose **Share → AirDrop → AimDrop**,
+   or use **AirDrop** in Finder on a Mac.
 2. Enter the PIN shown on your Mac when pairing for the first time.
 3. Follow the transfer in the progress panel.
 4. Choose a destination and click **Save here**.
@@ -60,7 +64,7 @@ If you cancel the folder picker, the files stay in AimDrop's inbox. Use
 notification. After saving, the completion panel offers **Show in Finder** and **Open**.
 
 Changing the receiver name or avatar requires a new PIN. After pairing,
-**close and reopen AirDrop on your iPhone** to refresh the displayed name and image.
+**close and reopen AirDrop on the sending device** to refresh the displayed name and image.
 Ordinary application restarts preserve pairing.
 
 ## Languages
@@ -77,8 +81,11 @@ Receiver names and file names are preserved exactly as entered or received.
 
 AimDrop checks the latest stable release in this repository every 24 hours,
 including across application restarts. Select **Check for Updates…** in the menu
-or Settings to check immediately. A newer version produces a notification with
-a **Download** button that opens its GitHub download.
+to check immediately. Enable or disable **Notify about new versions** in Settings
+and click **Save**. Notifications are enabled by default and include a **Download**
+button that opens the GitHub download. This preference controls new-version
+notifications; scheduled checks, manual results and file-transfer notifications
+continue to work.
 
 Outbound firewalls such as LuLu must allow AimDrop to reach `api.github.com`
 for update checks.

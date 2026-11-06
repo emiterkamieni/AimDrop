@@ -39,9 +39,10 @@ struct AppPreferences: Codable, Equatable {
     var completionSound = true
     var avatarPNG: Data? = nil
     var language = AppLanguage.system
+    var updateNotifications = true
 
     private enum CodingKeys: String, CodingKey {
-        case receiverName, automaticSave, destination, completionSound, avatarPNG, language
+        case receiverName, automaticSave, destination, completionSound, avatarPNG, language, updateNotifications
     }
 
     static func normalizedName(_ value: String) throws -> String {
@@ -79,6 +80,7 @@ extension AppPreferences {
         avatarPNG = try values.decodeIfPresent(Data.self, forKey: .avatarPNG)
         // Missing or future language codes must never reset existing preferences.
         language = (try? values.decode(String.self, forKey: .language)).flatMap(AppLanguage.init(rawValue:)) ?? .system
+        updateNotifications = try values.decodeIfPresent(Bool.self, forKey: .updateNotifications) ?? true
     }
 }
 

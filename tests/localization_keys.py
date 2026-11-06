@@ -45,8 +45,8 @@ def catalogs():
             raise ValueError("Conflicting Polish translations for " + repr(en))
         polish[en] = pl
 
-    add("AimDrop receives the files you choose to share with AirDrop from your iPhone.",
-        "AimDrop odbiera wybrane przez Ciebie pliki AirDrop z iPhone’a.")
+    add("AimDrop receives the files you choose to share with AirDrop from your Apple devices.",
+        "AimDrop odbiera wybrane przez Ciebie pliki AirDrop z urządzeń Apple.")
 
     for path in sorted((ROOT / "Sources").glob("*.swift")):
         for match in SWIFT_PAIR.finditer(path.read_text()):

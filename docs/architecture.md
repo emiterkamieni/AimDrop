@@ -43,6 +43,11 @@ only newer stable semantic versions produce an update result. Download URLs are
 restricted to release URLs in this repository. The notification center remains
 shared with transfer reminders so both sets of actions work together.
 
+The new-version notification preference defaults to enabled for existing and new
+installations. It only controls automatic update notifications; manual checks and
+the 24-hour scheduler remain active. Disabling it clears update notifications
+without removing transfer reminders, and invalidates late delivery acknowledgements.
+
 ## Stable storage
 
 The bundle identifier, historical Application Support directory, preference key

@@ -15,7 +15,7 @@ final class PairingWindowController: NSObject {
 
     @objc func refreshLocalization() {
         window?.title = L10n.text("AimDrop — pairing", "AimDrop — parowanie")
-        heading?.stringValue = L10n.text("Enter this code on your iPhone", "Wpisz ten kod na iPhonie")
+        heading?.stringValue = L10n.text("Enter this code on the sending device", "Wpisz ten kod na urządzeniu wysyłającym")
         detail?.stringValue = L10n.text("Pairing will be remembered. The code is needed for the first connection or after pairing expires.", "Parowanie zostanie zapamiętane. Kod jest potrzebny przy pierwszym połączeniu lub po wygaśnięciu parowania.")
     }
 
