@@ -16,6 +16,7 @@ for name in ("pake-bridge", "pair-verify-bridge"):
     objects.append(str(obj))
 subprocess.run([
     "xcrun", "swiftc", "-O", "-parse-as-library", "-D", "AIRFOLDER_HELPER", "-module-name", "rapportd",
+    *(["-D", "AIMDROP_EXPERIMENT_OLD"] if "--experiment-old" in sys.argv[2:] else []),
     "-target", "arm64-apple-macos14.0", "-I", str(ROOT / ".build/research-modules"),
     "-module-cache-path", str(ROOT / ".build/research-module-cache"),
     "-import-objc-header", str(SOURCE / "pake-bridge.h"), str(ROOT / "NativeReceiver/helper.swift"),

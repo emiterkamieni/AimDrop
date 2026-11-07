@@ -7,6 +7,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import sparkle
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP = ROOT / "dist" / "AimDrop.app"
@@ -18,12 +19,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=pathlib.Path, default=APP)
     parser.add_argument("--bundled-python", type=pathlib.Path, help="Relocatable Python runtime to include in the app")
+    parser.add_argument("--update-experiment", type=pathlib.Path, help="Isolated updater experiment configuration (never for release)")
     args = parser.parse_args()
     app = args.output.resolve()
     CONTENTS = app / "Contents"
     RESOURCES = CONTENTS / "Resources"
     (CONTENTS / "MacOS").mkdir(parents=True, exist_ok=True)
     RESOURCES.mkdir(exist_ok=True)
+    framework_dir = sparkle.embed(CONTENTS)
+    experiment = json.loads(args.update_experiment.read_text()) if args.update_experiment else None
     cache = ROOT / ".build" / "module-cache"
     cache.mkdir(parents=True, exist_ok=True)
     artwork = ROOT / ".build" / "artwork"
@@ -38,10 +42,15 @@ def main():
     shutil.copy2(artwork / "AimDropAvatar.png", RESOURCES / "AimDropAvatar.png")
     subprocess.run([sys.executable, str(ROOT / "scripts/build-native.py"),
                     str(CONTENTS / "MacOS/AimDropReceiver")], check=True)
+    subprocess.run(["xcrun", "swiftc", "-O", "-framework", "Foundation", "-module-cache-path", str(cache),
+                    str(ROOT / "NativeInbox/trash.swift"), "-o", str(CONTENTS / "MacOS/AimDropTrash")], check=True)
+    subprocess.run(["codesign", "--force", "--sign", "-", str(CONTENTS / "MacOS/AimDropTrash")], check=True)
     subprocess.run([
         "xcrun", "swiftc", "-O", "-framework", "Cocoa", "-framework", "UserNotifications",
         "-framework", "QuickLookThumbnailing", "-framework", "UniformTypeIdentifiers", "-framework", "ImageIO",
         "-framework", "ServiceManagement",
+        "-F", str(framework_dir), "-framework", "Sparkle", "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Frameworks",
+        *(["-D", "AIMDROP_UPDATE_EXPERIMENT"] if experiment else []),
         "-module-cache-path", str(cache),
         *map(str, sorted((ROOT / "Sources").glob("*.swift"))),
         "-o", str(CONTENTS / "MacOS" / "AimDrop"),
@@ -89,14 +98,23 @@ def main():
     with (CONTENTS / "Info.plist").open("wb") as stream:
         plistlib.dump({
             "CFBundleName": "AimDrop",
-            "CFBundleDisplayName": "AimDrop",
+            "CFBundleDisplayName": "AimDrop Update Test" if experiment else "AimDrop",
             # Preserve notification permissions and user preferences across the rename.
-            "CFBundleIdentifier": "pl.airfrajer.prototype",
+            "CFBundleIdentifier": "pl.aimdrop.update-experiment" if experiment else "pl.airfrajer.prototype",
             "CFBundleExecutable": "AimDrop",
             "CFBundleIconFile": "AimDrop.icns",
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "0.8.2",
-            "CFBundleVersion": "22",
+            "CFBundleShortVersionString": experiment["version"] if experiment else "0.8.4",
+            "CFBundleVersion": experiment["build"] if experiment else "24",
+            "SUFeedURL": experiment["feed"] if experiment else "https://github.com/emiterkamieni/AimDrop/releases/latest/download/appcast.xml",
+            "SUPublicEDKey": experiment["public_key"] if experiment else "kazbF5Wyx5BVHbPvTPNmovXPBH3xCD+U8+/Bo7A4UkQ=",
+            "SUEnableAutomaticChecks": False,
+            "SUAllowsAutomaticUpdates": False,
+            "SUAutomaticallyUpdate": False,
+            "SUEnableSystemProfiling": False,
+            "SURequireSignedFeed": True,
+            "SUVerifyUpdateBeforeExtraction": True,
+            **({"AimDropUpdateExperiment": experiment, "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True}} if experiment else {}),
             "CFBundleDevelopmentRegion": "en",
             "CFBundleLocalizations": ["en", "pl", "de", "fr", "es", "it", "pt", "nl", "sv", "cs", "uk", "ja", "ko", "zh-Hans", "zh-Hant"],
             "LSMinimumSystemVersion": "26.0",

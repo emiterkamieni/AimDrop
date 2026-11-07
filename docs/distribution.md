@@ -47,7 +47,7 @@ From the repository root:
 python3 scripts/package.py --prepare-runtime
 
 # Build, sign, verify, and archive the app. Use its current source version.
-python3 scripts/package.py --version 0.8.2
+python3 scripts/package.py --version 0.8.4
 ```
 
 `--version` is an assertion against `CFBundleShortVersionString`; it does not
@@ -55,7 +55,8 @@ change the version. Omit it to use the built app's version automatically.
 Outputs are:
 
 ```text
-dist/AimDrop-0.8.2-macos-arm64.zip
+dist/AimDrop.app
+dist/AimDrop-0.8.4-macos-arm64.zip
 dist/SHA256SUMS
 ```
 
@@ -66,8 +67,10 @@ or keys. The downloaded runtime is freshly extracted from its verified archive
 on each invocation, so additions made to a previously prepared runtime do not
 enter the release. Build and download caches stay under ignored `.build/`.
 
-The packager signs every bundled Mach-O executable/library ad hoc, then signs
-the enclosing app. It checks arm64 architecture, symlink containment, dynamic
+The packager signs AimDrop's bundled Mach-O executables/libraries ad hoc, then
+signs the enclosing app. Sparkle retains its upstream nested signatures and
+universal arm64/x86_64 binaries; all AimDrop/Python binaries remain arm64-only.
+The packager checks architecture, symlink containment, dynamic
 library load paths, the relative Python setting, runtime imports, SSL contexts,
 and code signatures. It uses `ditto` to preserve executable modes and symlinks
 without Finder metadata, then extracts the ZIP into a different directory with
@@ -75,6 +78,75 @@ spaces in its name, removes the original staged app, and repeats runtime and
 signature checks. Runtime checks use isolated Python, a temporary home, and a
 system-only PATH. They also run the bundled receiver's `--help` import path.
 These checks do not replace an app-launch and real-device transfer test.
+
+Quit the running `dist/AimDrop.app` before packaging; the packager refuses to
+overwrite it while running. The verified portable bundle is delivered there,
+alongside the ZIP, rather than at a development staging path.
+For a release intended to update the running copy, use `--archive-only`. The
+fresh staged build is verified and archived normally, while `dist/AimDrop.app`
+stays at its current version until the user installs the published update.
+
+## Sparkle updates
+
+`scripts/sparkle.py` pins the official Sparkle 2.10.1 distribution with SHA-256
+`1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27`.
+The framework is embedded in `Contents/Frameworks`; its executable permissions,
+symlinks, licenses and nested helper signatures are retained. Load-path checks
+use each helper's executable location. Bundled tools remain in the build cache.
+
+Production update keys were generated in the login Keychain under the
+`AimDrop-Releases` account. Only the public key is in `scripts/build.py` and the
+app's `SUPublicEDKey`. Keep a protected backup of the signing key outside this
+repository. Ad-hoc signing does not provide a Developer ID fallback if this key
+is lost. Use the separate `AimDrop-UpdateExperiment` account for test builds.
+
+Increment both the displayed release version and the monotonic build number in
+`scripts/build.py`. To build and sign a release:
+
+```sh
+python3 -B scripts/prepare-update.py --version 0.8.4 --notes docs/releases/0.8.4.md
+# Optional: --notes release-notes.md --previous-appcast previous-appcast.xml
+# After packaging separately: add --existing-build
+# To keep the current dist/AimDrop.app running: add --archive-only
+```
+
+Allow Sparkle's `generate_appcast` tool to access the appropriate key in the
+system Keychain dialog. It signs the final archive and feed; editing either
+afterward requires signing again. This uses full ZIP updates, without deltas.
+Before emitting the feed and checksums, `prepare-update.py` independently checks
+both Ed25519 signatures with `verify-update.swift` and the archive's public key.
+Verification uses CryptoKit and does not access the Keychain.
+This dialog is shown only to the release publisher, never to end users checking
+or installing an update. Keep Sparkle's original Keychain item label
+`Private key for signing Sparkle updates`; distinguish keys by account
+(`AimDrop-Releases` versus `AimDrop-UpdateExperiment`). Changing this sensitive
+item's label caused macOS to return `errSecInvalidItemRef` during signing;
+restoring the original label restored access without replacing the key.
+macOS controls the dialog wording and displays `generate_appcast` as the requester.
+The output is `dist/appcast.xml` and an updated `dist/SHA256SUMS` alongside the
+app and ZIP. Existing feed entries retain their version-specific download URLs.
+
+Attach the ZIP, appcast and checksums to the matching **draft** GitHub release,
+then publish all assets together. The app's stable feed URL is
+`https://github.com/emiterkamieni/AimDrop/releases/latest/download/appcast.xml`.
+The archive URLs point to specific release tags, not mutable latest ZIPs.
+Version 0.8.4 (build 24) is the first public updater-bearing release. Public
+0.8.2 and earlier clients must install it manually once. The local 0.8.3 build
+(build 23) can install 0.8.4 through its existing updater using the same public key.
+
+Run `python3 -B scripts/check-update-experiment.py` for an actual two-version
+update using an isolated full bundle under `dist/update-experiment`, a local
+signed feed, test-only bundle identity/storage and native loopback transport.
+It verifies exact-path replacement, relaunch, the real clean-shutdown barrier,
+login status and inbox/identity persistence. Use `--login on` to test enabled
+registration, or `--tamper archive` / `--tamper feed` to verify rejection.
+The two test versions contain differently compiled/signed native helpers too.
+`scripts/check-native-update.py --app dist/AimDrop.app` exercises native paired
+HTTP3 transfers before, after canceling, and during the drain barrier (using the
+research client built by `scripts/research/build-pairing-prototypes.py`).
+This does not validate actual
+login-session launch or iPhone permissions; those require an interactive device
+check. Experiment builds are rejected by the production signing script.
 
 The script produces local files only. A release maintainer should test the
 extracted app, then attach its ZIP and matching `SHA256SUMS` to the release

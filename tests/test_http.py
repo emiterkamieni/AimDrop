@@ -394,7 +394,7 @@ class ReceiverIntegrationTests(unittest.TestCase):
             finally:
                 other.close()
         self.assertEqual(self.event("canceled"), dict(event="canceled", id=incoming["id"], phase="receiving"))
-        self.assertEqual(list(inbox.root.iterdir()), [])
+        self.assertEqual([path.name for path in inbox.root.iterdir()], [".retention-migration.json"])
         self.assertEqual(inbox.list_ready(), [])
         self.assertFalse(any(event["event"] == "error" for event in list(self.events.queue)))
         self.assertEqual(self.post("/Ask", plistlib.dumps(request(str(uuid.uuid4()))))[0], 200)

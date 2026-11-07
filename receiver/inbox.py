@@ -1,4 +1,5 @@
 """Durable, app-managed downloads awaiting a user-selected destination."""
+import fcntl
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ import uuid
 
 from .archive import ReceiveDirectory, quarantine_file
 from .localization import message
+from .retention import DAY_NS, retention_days
 
 
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -22,6 +24,23 @@ def _sync(directory):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _write_json(path, value):
+    temporary = path.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as target:
+        json.dump(value, target, ensure_ascii=True)
+        target.flush()
+        os.fsync(target.fileno())
+    os.replace(temporary, path)
+    _sync(path.parent)
+
+
+def _read_json(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r", encoding="utf-8") as source:
+        return json.load(source), os.fstat(source.fileno()).st_mtime_ns
 
 
 def _walk(fd, names, prefix=()):
@@ -41,12 +60,17 @@ def _walk(fd, names, prefix=()):
 
 
 class Inbox:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, days=7, automatic_trash=True, clock=None):
         root = Path(root)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root = root.resolve(strict=True)
         self._guard = threading.Lock()
         self._locks = {}
+        self._reservations = {}
+        self._draining = False
+        self.clock = clock or time.time_ns
+        self.days = retention_days(days)
+        self.automatic_trash = automatic_trash
         self._latest_lock = threading.Lock()
         self._latest = None
         self._latest_invalid = False
@@ -63,6 +87,63 @@ class Inbox:
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             # Unknown history must not expose an older job as the last transfer.
             self._latest_invalid = True
+        migration = self.root / ".retention-migration.json"
+        try:
+            self._migration, _ = _read_json(migration)
+            self._validate_retention(self._migration)
+        except FileNotFoundError:
+            start = self.clock()
+            self._migration = dict(retention_started_at_ns=start, retention_days=self.days,
+                                   expires_at_ns=start + self.days * DAY_NS)
+            _write_json(migration, self._migration)
+        self.recover_operations()
+        # Materialize the grace period once, before publishing the initial list.
+        self.list_ready()
+
+    def configure_retention(self, days, enabled):
+        days = retention_days(days)
+        if type(enabled) is not bool:
+            raise ValueError("Invalid retention switch")
+        with self._guard:
+            self.days, self.automatic_trash = days, enabled
+
+    @staticmethod
+    def _validate_retention(data):
+        days = retention_days(data["retention_days"])
+        start, end = data["retention_started_at_ns"], data["expires_at_ns"]
+        if type(start) is not int or type(end) is not int or start <= 0 or end != start + days * DAY_NS:
+            raise ValueError("Invalid receipt deadline")
+
+    def reserve(self, ident, kind, token=None):
+        job, _ = self._job(ident)
+        ident = job.name
+        with self._guard:
+            old = self._reservations.get(ident)
+            if self._draining and not (old == ("hold", token) and kind in ("save", "trash")):
+                return None
+            if old is not None and not (old == ("hold", token) and kind in ("save", "trash")):
+                return None
+            if (not (job / "ready.json").is_file() or os.path.lexists(job / "retired.json")
+                    or os.path.lexists(job / "trash.json")):
+                return None
+            value = token if (old or kind == "hold") and token else str(uuid.uuid4())
+            self._reservations[ident] = (kind, value)
+            return value
+
+    def release(self, ident, token):
+        ident = str(uuid.UUID(ident))
+        with self._guard:
+            old = self._reservations.get(ident)
+            if old is not None and old[1] == token:
+                self._reservations.pop(ident)
+
+    def drain(self, enabled):
+        with self._guard:
+            self._draining = enabled
+
+    def has_reservations(self):
+        with self._guard:
+            return bool(self._reservations)
 
     def _job(self, ident):
         ident = str(uuid.UUID(ident))
@@ -86,10 +167,19 @@ class Inbox:
                     paths=[str(job / "payload" / name) for name in files])
 
     def _read(self, job):
-        fd = os.open(job / "ready.json", os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(fd, "r", encoding="utf-8") as source:
-            data = json.load(source)
-        return self._info(job, data["count"], data["files"])
+        if os.path.lexists(job / "retired.json") or os.path.lexists(job / "trash.json"):
+            raise FileNotFoundError("Transfer is no longer ready")
+        data, legacy_time = _read_json(job / "ready.json")
+        info = self._info(job, data["count"], data["files"])
+        received = data.get("received_at_ns", legacy_time)
+        if type(received) is not int or received <= 0:
+            raise ValueError("Invalid receipt time")
+        if not any(key in data for key in self._migration):
+            data.update(self._migration)
+            data["received_at_ns"] = received
+            _write_json(job / "ready.json", data)
+        self._validate_retention(data)
+        return dict(info, received_at_ns=received, **{key: data[key] for key in self._migration})
 
     def prepare(self, id: str) -> str:
         job, lock = self._job(id)
@@ -117,11 +207,15 @@ class Inbox:
             finally:
                 os.close(fd)
             with self._latest_lock:
-                received = max(time.time_ns(), (self._latest or {}).get("received_at_ns", 0) + 1)
+                received = max(self.clock(), (self._latest or {}).get("received_at_ns", 0) + 1)
+                with self._guard:
+                    days = self.days
                 temporary = job / "ready.tmp"
                 fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, "w", encoding="utf-8") as target:
-                    json.dump(dict(count=count, files=info["files"], received_at_ns=received), target, ensure_ascii=True)
+                    json.dump(dict(count=count, files=info["files"], received_at_ns=received,
+                                   retention_started_at_ns=received, retention_days=days,
+                                   expires_at_ns=received + days * DAY_NS), target, ensure_ascii=True)
                     target.flush()
                     os.fsync(target.fileno())
                 os.replace(temporary, job / "ready.json")
@@ -129,7 +223,7 @@ class Inbox:
                 self._latest = dict(id=info["id"], received_at_ns=received)
                 self._latest_invalid = False
                 self._persist_latest()
-            return info
+            return self._read(job)
 
     def _persist_latest(self):
         # Keep the last ID even after its ready marker is retired by save().
@@ -196,6 +290,135 @@ class Inbox:
             if job.exists() and not os.path.lexists(job / "ready.json"):
                 shutil.rmtree(job)
 
+    def _retire(self, job, reason):
+        try:
+            _write_json(job / "retired.json", dict(reason=reason))
+        except OSError:
+            # A directory sync may fail after the atomic marker publication.
+            # The destination has already been committed; do not reoffer it.
+            try:
+                marker, _ = _read_json(job / "retired.json")
+            except (OSError, ValueError):
+                raise
+            if marker != dict(reason=reason):
+                raise
+        try:
+            (job / "ready.json").unlink()
+            _sync(job)
+        except OSError:
+            pass  # The durable retired marker already prevents another save.
+
+    @staticmethod
+    def _cleanup_retired_job(job):
+        try:
+            # Keep the retirement proof until the last payload byte is removed.
+            for child in job.iterdir():
+                if child.name == "retired.json":
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            (job / "retired.json").unlink()
+            job.rmdir()
+        except OSError:
+            pass
+
+    def cleanup_retired(self):
+        for path in self.root.iterdir():
+            try:
+                job, lock = self._job(path.name)
+                if not lock.acquire(blocking=False):
+                    continue
+                try:
+                    data, _ = _read_json(job / "retired.json")
+                    if data == {"reason": "saved"} or data == {"reason": "trashed"}:
+                        self._cleanup_retired_job(job)
+                finally:
+                    lock.release()
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+
+    def recover_operations(self):
+        recovered = []
+        for path in self.root.iterdir():
+            try:
+                job, lock = self._job(path.name)
+                if not lock.acquire(blocking=False):
+                    continue
+                try:
+                    if not (job / "trash.json").exists() or (job / "retired.json").exists():
+                        continue
+                    fd = os.open(job / ".operation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        data, _ = _read_json(job / "trash.json")
+                        name = data["folder"]
+                        if not isinstance(name, str) or not name.startswith("AimDrop ") or Path(name).name != name:
+                            continue
+                        source, payload = job / name, job / "payload"
+                        outcome = "restored"
+                        if source.is_symlink() or payload.is_symlink():
+                            continue
+                        if source.is_dir() and not payload.exists():
+                            os.rename(source, payload)
+                        elif source.exists():
+                            continue
+                        elif not payload.exists():
+                            self._retire(job, "trashed")
+                            outcome = "trashed"
+                        (job / "trash.json").unlink()
+                        _sync(job)
+                        recovered.append((job.name, outcome))
+                    finally:
+                        os.close(fd)
+                finally:
+                    lock.release()
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+        return recovered
+
+    def trash(self, ident, move_to_trash):
+        job, lock = self._job(ident)
+        with lock:
+            info = self._read(job)
+            # Move the entire payload as one directory, keeping receipt/journal
+            # outside it so a lost acknowledgement can be recovered after restart.
+            stamp = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(info["received_at_ns"] / 1e9))
+            name = "AimDrop " + stamp + " " + job.name
+            source = job / name
+            fd = os.open(job / ".operation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                _write_json(job / "trash.json", dict(folder=name))
+                staged = False
+                try:
+                    os.rename(job / "payload", source)
+                    staged = True
+                    _sync(job)
+                    move_to_trash(source, fd)
+                    if source.exists():
+                        raise OSError("Trash helper did not move the transfer")
+                except Exception:
+                    if not staged:
+                        (job / "trash.json").unlink()
+                        _sync(job)
+                        raise
+                    if source.exists():
+                        os.rename(source, job / "payload")
+                        (job / "trash.json").unlink()
+                        _sync(job)
+                        raise
+                    if (job / "payload").exists():
+                        (job / "trash.json").unlink()
+                        _sync(job)
+                        raise
+                    # The OS completed the move, but the helper's reply was lost.
+                self._retire(job, "trashed")
+            finally:
+                os.close(fd)
+            self._cleanup_retired_job(job)
+
     def save(self, id: str, destination: str, progress=None) -> dict:
         job, lock = self._job(id)
         with lock:
@@ -253,7 +476,7 @@ class Inbox:
                               paths=[str(path) for path in paths])
                 # Publication is the commit point. Retire the ready marker before cleanup
                 # so an interrupted cleanup cannot offer an already-saved job again.
-                (job / "ready.json").unlink()
+                self._retire(job, "saved")
             except Exception as error:
                 if directory.published:
                     raise RuntimeError(message("%s; files already saved: %s", "%s; już zapisane pliki: %s",
@@ -261,5 +484,5 @@ class Inbox:
                 raise
             finally:
                 directory.close()
-            shutil.rmtree(job, ignore_errors=True)
+            self._cleanup_retired_job(job)
             return result

@@ -222,6 +222,10 @@ class ReceiverServer(ThreadingHTTPServer):
             if not self.connection_condition.wait_for(lambda: not self.connections, timeout=8):
                 LOG.warning("Some request threads did not finish cleanup within the shutdown deadline")
 
+    def has_uploads(self):
+        with self.connection_condition:
+            return bool(self.uploads)
+
     def claim_upload(self, ident, address, connection):
         # Registration and cancellation share the session lock: no uninterruptible
         # gap between claiming the offer and entering a blocking socket read.

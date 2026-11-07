@@ -167,7 +167,7 @@ class SessionTests(unittest.TestCase):
         with self.assertRaises(Refused):
             self.sessions.offer(request(self.ident), PEER)
         self.assertIsNone(self.sessions.current)
-        self.assertEqual(list(inbox.root.iterdir()), [])
+        self.assertEqual([path.name for path in inbox.root.iterdir()], [".retention-migration.json"])
         self.assertEqual([event for event, _ in self.events], ["incoming", "offer_closed", "canceled"])
 
     def test_cancel_only_matches_current_offer_and_is_idempotent(self):

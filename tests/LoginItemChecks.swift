@@ -2,10 +2,57 @@ import Cocoa
 import ServiceManagement
 
 @main struct LoginItemChecks {
+    static func checkDefaultRegistration() throws {
+        for (initial, existing, expected) in [
+            (SMAppService.Status.notRegistered, false, 1),
+            (.notFound, false, 1),
+            (.enabled, false, 0),
+            (.requiresApproval, false, 0),
+            (.notRegistered, true, 0)
+        ] {
+            let suite = "pl.aimdrop.login-default-checks." + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            var status = initial
+            var registrations = 0
+            let manager = LoginItemManager(status: { status }, register: {
+                registrations += 1; status = .enabled
+            }, unregister: { status = .notRegistered }, openSettings: {})
+            try manager.enableByDefaultIfNeeded(existingInstallation: existing, defaults: defaults)
+            precondition(registrations == expected)
+            if expected == 1 { precondition(status == .enabled) }
+            try manager.setEnabled(false)
+            try manager.enableByDefaultIfNeeded(existingInstallation: false, defaults: UserDefaults(suiteName: suite)!)
+            precondition(status == .notRegistered && registrations == expected,
+                         "A later launch must preserve an explicit opt-out")
+        }
+        let suite = "pl.aimdrop.login-default-error." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var shouldFail = true, registrations = 0
+        var status = SMAppService.Status.notRegistered
+        let manager = LoginItemManager(status: { status }, register: {
+            registrations += 1
+            if shouldFail { throw PreferenceError(message: "Registration failed") }
+            status = .enabled
+        }, unregister: {}, openSettings: {})
+        do {
+            try manager.enableByDefaultIfNeeded(existingInstallation: false, defaults: defaults)
+            fatalError("Registration error must be reported")
+        } catch is PreferenceError { }
+        try manager.enableByDefaultIfNeeded(existingInstallation: false, defaults: defaults)
+        precondition(registrations == 1 && status == .notRegistered)
+        shouldFail = false
+        try manager.setEnabled(true)
+        precondition(registrations == 2 && status == .enabled, "Manual retry must still work")
+        print("PASS: default-on first launch, persistent opt-out, legacy/approval preservation and registration failure/manual retry")
+    }
+
     static func main() throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
+        try checkDefaultRegistration()
         let suite = "pl.airfolder.login-settings-checks." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }

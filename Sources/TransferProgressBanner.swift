@@ -160,9 +160,8 @@ private final class ProgressCardView: NSView {
         addSubview(cancelButton)
 
         for (index, button) in [revealButton, openButton].enumerated() {
-            button.frame = NSRect(x: 16 + CGFloat(index) * 178, y: 88, width: 170, height: 28)
-            button.bezelStyle = .rounded
-            button.font = .systemFont(ofSize: 12, weight: .medium)
+            button.frame = NSRect(x: 16 + CGFloat(index) * 178, y: 88, width: 170, height: ActionButtonStyle.height)
+            ActionButtonStyle.apply(to: button, autoLayout: false)
             button.target = self
             button.action = index == 0 ? #selector(revealClicked) : #selector(openClicked)
             button.isHidden = true

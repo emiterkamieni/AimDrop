@@ -24,6 +24,7 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
     private var deliveries: [String: Delivery] = [:]
     private var order: [String] = []
     private var delivering = false
+    private var knownPending = Set<String>()
     var log: ((String) -> Void)?
     var onSavePending: ((String) -> Void)?
     var onOpenUpdate: ((URL) -> Void)?
@@ -69,7 +70,7 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
         let reveal = UNNotificationAction(identifier: revealAction, title: L10n.text("Show in Finder", "Pokaż w Finderze"), options: [.foreground])
         let open = UNNotificationAction(identifier: openAction, title: L10n.text("Open", "Otwórz"), options: [.foreground])
         let save = UNNotificationAction(identifier: saveAction, title: L10n.text("Choose folder", "Wybierz folder"), options: [.foreground])
-        let download = UNNotificationAction(identifier: downloadAction, title: L10n.text("Download", "Pobierz"), options: [.foreground])
+        let download = UNNotificationAction(identifier: downloadAction, title: L10n.text("Show Update", "Pokaż aktualizację"), options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: category, actions: [reveal, open], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: pendingCategory, actions: [save], intentIdentifiers: [], options: []),
@@ -91,12 +92,14 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     func cancel(id: String) {
         queue.async {
+            self.knownPending.remove(id)
             self.enqueue(id: self.identifier(id), content: nil)
         }
     }
 
     func awaitingDestination(id: String, count: Int) {
         queue.async {
+            self.knownPending.insert(id)
             let content = UNMutableNotificationContent()
             // macOS owns the compact banner layout and overlays its action on
             // the right. Keep both lines short; the button supplies the prompt.
@@ -106,6 +109,24 @@ final class TransferNotifications: NSObject, UNUserNotificationCenterDelegate {
             content.threadIdentifier = "airfrajer.transfers"
             content.userInfo = ["pendingID": id]
             self.enqueue(id: self.identifier(id), content: content)
+        }
+    }
+
+    func reconcilePending(ids: Set<String>) {
+        queue.async {
+            self.knownPending.formUnion(ids)
+            let reconcile: ([UNNotificationRequest]) -> Void = { [weak self] requests in
+                guard let self else { return }
+                self.queue.async {
+                    for request in requests where request.content.categoryIdentifier == self.pendingCategory {
+                        if let id = request.content.userInfo["pendingID"] as? String, !self.knownPending.contains(id) {
+                            self.enqueue(id: request.identifier, content: nil)
+                        }
+                    }
+                }
+            }
+            self.center.getPendingNotificationRequests(completionHandler: reconcile)
+            self.center.getDeliveredNotifications { reconcile($0.map(\.request)) }
         }
     }
 

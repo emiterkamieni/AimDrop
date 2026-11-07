@@ -40,9 +40,12 @@ struct AppPreferences: Codable, Equatable {
     var avatarPNG: Data? = nil
     var language = AppLanguage.system
     var updateNotifications = true
+    var automaticTrash = true
+    var retentionDays = 7
 
     private enum CodingKeys: String, CodingKey {
         case receiverName, automaticSave, destination, completionSound, avatarPNG, language, updateNotifications
+        case automaticTrash, retentionDays
     }
 
     static func normalizedName(_ value: String) throws -> String {
@@ -66,6 +69,9 @@ struct AppPreferences: Codable, Equatable {
         if automaticSave && destination == nil {
             throw PreferenceError(message: L10n.text("Choose a folder for automatic saving.", "Wybierz folder dla automatycznego zapisu."))
         }
+        guard (1...36500).contains(retentionDays) else {
+            throw PreferenceError(message: L10n.text("Enter a whole number of days between 1 and 36500.", "Podaj całkowitą liczbę dni od 1 do 36500."))
+        }
         return result
     }
 }
@@ -81,6 +87,9 @@ extension AppPreferences {
         // Missing or future language codes must never reset existing preferences.
         language = (try? values.decode(String.self, forKey: .language)).flatMap(AppLanguage.init(rawValue:)) ?? .system
         updateNotifications = try values.decodeIfPresent(Bool.self, forKey: .updateNotifications) ?? true
+        automaticTrash = (try? values.decode(Bool.self, forKey: .automaticTrash)) ?? true
+        let days = (try? values.decode(Int.self, forKey: .retentionDays)) ?? 7
+        retentionDays = (1...36500).contains(days) ? days : 7
     }
 }
 
@@ -90,6 +99,8 @@ final class PreferencesStore {
     private let key = "AirFolderPreferences.v1"
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+    var hasSavedPreferences: Bool { defaults.object(forKey: key) != nil }
 
     func load() -> AppPreferences {
         guard let data = defaults.data(forKey: key),

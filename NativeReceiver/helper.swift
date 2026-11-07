@@ -70,6 +70,9 @@ actor NativeReceiverHost {
         try await state.files?.start()
         try await publishPairingActors()
         events.send("ready", endpointPorts().merging(["name": state.receiverName, "avatar_digest": state.avatarDigest]) { _, new in new })
+        #if AIMDROP_EXPERIMENT_OLD
+        events.send("experiment_old") // Makes the two test helpers genuinely different signed code.
+        #endif
     }
     private func publishPairingActors() async throws {
         for (prePair, type) in [(true, "_appSvcPrePair._tcp"), (false, "_applicationServicePairing._tcp")] {
@@ -121,9 +124,13 @@ actor NativeReceiverHost {
         guard selected.digest == digest else { throw ProbeError.invalidArgument }
         return try await updateProfile(name, avatar: selected)
     }
-    func stop() {
+    func quiesce(_ request: String) {
+        state.files?.quiesce { [events] in events.send("quiesced", ["request_id": request]) }
+    }
+    func resume() { state.files?.resume() }
+    func stop() async {
         stopPairingActors()
-        state.files?.stop()
+        await state.files?.stopAndWait()
         events.send("pin_closed")
     }
 }
@@ -161,6 +168,9 @@ actor NativeReceiverHost {
                 for await command in commands {
                     if command["command"] as? String == "shutdown" { break }
                     let action = command["command"] as? String
+                    if action == "quiesce", let request = command["request_id"] as? String, UUID(uuidString: request) != nil {
+                        await host.quiesce(request)
+                    } else if action == "resume" { await host.resume() }
                     if action == "set_name" || action == "set_profile", let name = command["name"] as? String,
                        let request = command["request_id"] as? String, UUID(uuidString: request) != nil {
                         do {

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Exercise the actual bundled worker over IPC and TLS, without radio discovery."""
 import hashlib
+import fcntl
+import os
 import argparse
 import http.client
 import json
 from pathlib import Path
 import plistlib
 import queue
+import shutil
 import ssl
 import subprocess
 import sys
@@ -17,6 +20,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tests.fixtures import archive, dvzip, request
+from receiver.trash import MacTrash
 
 
 def main():
@@ -28,7 +32,7 @@ def main():
     if not python.is_absolute():
         python = bundle / "Resources" / python
     with tempfile.TemporaryDirectory(prefix="airfrajer-smoke-") as temp:
-        temp = Path(temp)
+        temp = Path(temp).resolve()
         destination = temp / "chosen"
         destination.mkdir()
         with (temp / "worker.log").open("w+") as log:
@@ -108,7 +112,24 @@ def main():
                 command({"command": "shutdown"})
                 assert process.wait(timeout=5) == 0, "Worker shutdown failed"
                 assert sorted(item.name for item in destination.iterdir()) == ["probe.bin"], "Staging leak"
-                print("PASS: native media discovery, live rename, buffered TLS receive, destination chosen after upload, SHA-256 (2 MiB), notification paths, cleanup, shutdown")
+                # Exercise the actual bundled Foundation bridge with only a tiny
+                # generated fixture, then remove that exact fixture from Trash.
+                trash_source = temp / ("AimDrop-test-" + uuid.uuid4().hex)
+                trash_source.mkdir()
+                (trash_source / "fixture.txt").write_bytes(b"trash smoke fixture")
+                fd = os.open(temp / "trash.lock", os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    trashed = Path(MacTrash(bundle / "MacOS/AimDropTrash")(trash_source, fd))
+                    assert trashed.name.startswith(trash_source.name), "Unexpected Trash target"
+                    try:
+                        assert not trash_source.exists(), "Trash source still exists"
+                        assert (trashed / "fixture.txt").read_bytes() == b"trash smoke fixture"
+                    finally:
+                        shutil.rmtree(trashed)
+                finally:
+                    os.close(fd)
+                print("PASS: native media discovery, live rename, buffered TLS receive, destination chosen after upload, SHA-256 (2 MiB), notification paths, cleanup, shutdown, bundled system Trash helper")
             finally:
                 if process.poll() is None:
                     process.terminate()

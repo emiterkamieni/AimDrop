@@ -6,10 +6,11 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sparkle
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKS = ["LocalizationChecks", "UpdateChecks", "NotificationChecks", "WindowPlacementChecks", "AvatarChecks", "SettingsChecks", "LoginItemChecks",
-          "LatestSaveChecks", "SettingsLanguageChecks", "ProgressModel", "ProgressResponsiveness", "ProgressPreview"]
+          "PendingTransfersChecks", "PendingFilePreviewChecks", "RetentionSettingsChecks", "SettingsLanguageChecks", "ProgressModel", "ProgressResponsiveness", "ProgressPreview"]
 
 
 def main():
@@ -28,6 +29,7 @@ def main():
         contents = app / "Contents"
         binary = contents / "MacOS" / name
         binary.parent.mkdir(parents=True, exist_ok=True)
+        framework_dir = sparkle.embed(contents)
         destination = contents / "Resources"
         destination.mkdir(exist_ok=True)
         for resource in ("AimDrop.png", "AimDropAvatar.png", "AimDrop.icns", "AimDropStatus.pdf"):
@@ -40,10 +42,12 @@ def main():
             "CFBundleExecutable": name, "CFBundlePackageType": "APPL", "CFBundleIconFile": "AimDrop.icns",
             "CFBundleShortVersionString": product_info["CFBundleShortVersionString"],
             "CFBundleVersion": product_info["CFBundleVersion"], "LSUIElement": True,
+            **{key: value for key, value in product_info.items() if key.startswith("SU")},
         }))
         subprocess.run(["xcrun", "swiftc", "-D", "AIRFOLDER_CHECKS", "-parse-as-library",
                         "-framework", "Cocoa", "-framework", "UserNotifications", "-framework", "QuickLookThumbnailing",
                         "-framework", "UniformTypeIdentifiers", "-framework", "ImageIO", "-framework", "ServiceManagement",
+                        "-F", str(framework_dir), "-framework", "Sparkle", "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Frameworks",
                         "-module-cache-path", str(ROOT / ".build/module-cache"), *sources,
                         str(ROOT / "tests" / (name + ".swift")), "-o", str(binary)], check=True, cwd=ROOT)
         subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)

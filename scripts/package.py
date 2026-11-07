@@ -197,12 +197,15 @@ def verify_native(root, executable_dir):
         raise ValueError("No Mach-O executables found")
     for path in binaries:
         arches = run("/usr/bin/lipo", "-archs", path, capture_output=True, text=True).stdout.split()
-        if arches != ["arm64"]:
+        vendor = inside(path, root / "Contents/Frameworks/Sparkle.framework")
+        if (not vendor and arches != ["arm64"]) or (vendor and ("arm64" not in arches or not set(arches) <= {"arm64", "x86_64"})):
             raise ValueError(f"Expected arm64: {path.relative_to(root)}")
-        loads = run("/usr/bin/otool", "-l", path, capture_output=True, text=True).stdout
+        loads = run("/usr/bin/otool", "-arch", "arm64", "-l", path, capture_output=True, text=True).stdout
         rpaths = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset", loads)
         python = root / "Contents/Resources/python"
         binary_executable_dir = python / "bin" if inside(path, python) else executable_dir
+        if vendor:
+            binary_executable_dir = path.parent
 
         def expand(value):
             if value.startswith("@loader_path/"):
@@ -277,14 +280,23 @@ def verify_app(app):
     version = info.get("CFBundleShortVersionString", "")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}(?:-[A-Za-z0-9.-]+)?", version):
         raise ValueError("Invalid release version in Info.plist")
-    for name in ("AimDrop", "AimDropReceiver"):
+    for name in ("AimDrop", "AimDropReceiver", "AimDropTrash"):
         executable = app / "Contents/MacOS" / name
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise ValueError(f"Missing app executable: {name}")
-    for name in ("receiver/main.py", "LICENSE", "THIRD_PARTY.md"):
+    for name in ("receiver/main.py", "LICENSE", "THIRD_PARTY.md", "Sparkle-LICENSE"):
         if not (app / "Contents/Resources" / name).is_file():
             raise ValueError(f"Missing app resource: {name}")
     runtime = app / "Contents/Resources/python"
+    if not (app / "Contents/Frameworks/Sparkle.framework").is_dir():
+        raise ValueError("Missing Sparkle framework")
+    for key in ("SUFeedURL", "SUPublicEDKey"):
+        if not isinstance(info.get(key), str) or not info[key]:
+            raise ValueError("Missing updater setting: " + key)
+    if info.get("SURequireSignedFeed") is not True or info.get("SUVerifyUpdateBeforeExtraction") is not True:
+        raise ValueError("Updates must require signed feeds and archives")
+    if info.get("SUEnableAutomaticChecks") is not False or info.get("SUAllowsAutomaticUpdates") is not False:
+        raise ValueError("Unexpected automatic Sparkle schedule/download setting")
     verify_runtime(runtime)
     # Runtime executable_path is its own bin/, not the GUI's Contents/MacOS/.
     for path in verify_native(app, app / "Contents/MacOS"):
@@ -293,7 +305,13 @@ def verify_app(app):
     return version
 
 
-def package(runtime, expected_version):
+def package(runtime, expected_version, archive_only=False):
+    output_app = ROOT / "dist/AimDrop.app"
+    if not archive_only:
+        executable = str(output_app / "Contents/MacOS/AimDrop")
+        processes = run("/bin/ps", "-axo", "command=", capture_output=True, text=True).stdout.splitlines()
+        if any(line.strip() == executable or line.strip().startswith(executable + " ") for line in processes):
+            raise ValueError("Quit AimDrop before replacing dist/AimDrop.app, or use --archive-only")
     with tempfile.TemporaryDirectory(prefix="package-", dir=ROOT / ".build") as folder:
         stage = Path(folder)
         app = stage / "AimDrop.app"
@@ -305,6 +323,8 @@ def package(runtime, expected_version):
             if path.is_file() and (path.name == ".DS_Store" or path.name.startswith("._")):
                 path.unlink()
         for binary in native_files(app):
+            if inside(binary, app / "Contents/Frameworks/Sparkle.framework"):
+                continue
             run("/usr/bin/codesign", "--force", "--sign", "-", binary, capture_output=True)
         run("/usr/bin/codesign", "--force", "--sign", "-", app)
         version = verify_app(app)
@@ -325,6 +345,12 @@ def package(runtime, expected_version):
         verify_app(relocated / "AimDrop.app")
         dist = ROOT / "dist"
         dist.mkdir(exist_ok=True)
+        # The verified, relocated bundle is also the local deliverable. Build
+        # staging stays private and is never advertised as the application.
+        if not archive_only:
+            if output_app.exists():
+                shutil.rmtree(output_app)
+            shutil.copytree(relocated / "AimDrop.app", output_app, symlinks=True)
         output = dist / name
         archive.replace(output)
         manifest = stage / "SHA256SUMS"
@@ -332,12 +358,15 @@ def package(runtime, expected_version):
         manifest.replace(dist / "SHA256SUMS")
         print(output)
         print(dist / "SHA256SUMS")
+        if not archive_only:
+            print(output_app)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", help="require this app version (does not modify the build version)")
     parser.add_argument("--prepare-runtime", action="store_true", help="download and verify Python without building the app")
+    parser.add_argument("--archive-only", action="store_true", help="build the release ZIP without replacing dist/AimDrop.app")
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64":
         parser.error("Run natively on an Apple Silicon Mac")
@@ -349,7 +378,7 @@ def main():
             verify_runtime(moved)
         print(runtime)
     else:
-        package(runtime, args.version)
+        package(runtime, args.version, archive_only=args.archive_only)
 
 
 if __name__ == "__main__":

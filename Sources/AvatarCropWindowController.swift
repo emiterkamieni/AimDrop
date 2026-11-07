@@ -76,9 +76,10 @@ final class AvatarCropWindowController: NSWindowController {
         zoomLabel.font = .systemFont(ofSize: 12)
         let zoomRow = NSStackView(views: [zoomLabel, zoom]); zoomRow.spacing = 12
         cancelButton.target = self; cancelButton.action = #selector(cancel)
-        cancelButton.keyEquivalent = "\u{1b}"; cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
         useButton.target = self; useButton.action = #selector(accept)
-        useButton.keyEquivalent = "\r"; useButton.bezelStyle = .rounded
+        useButton.keyEquivalent = "\r"
+        for button in [cancelButton, useButton] { ActionButtonStyle.apply(to: button) }
         let buttons = NSStackView(views: [cancelButton, useButton]); buttons.spacing = 8
         for view in [cropView, message, zoomRow, buttons] { stack.addArrangedSubview(view) }
         NSLayoutConstraint.activate([

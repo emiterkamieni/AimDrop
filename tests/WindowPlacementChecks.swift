@@ -26,23 +26,18 @@ import Cocoa
             precondition(visible.contains(frame))
             precondition(frame.midX == visible.midX && frame.midY == visible.midY)
         }
-        let available = AvailableUpdate(version: "99.0.0",
-            downloadURL: URL(string: "https://github.com/emiterkamieni/AimDrop/releases/tag/v99.0.0")!,
-            releasePageURL: URL(string: "https://github.com/emiterkamieni/AimDrop/releases/tag/v99.0.0")!)
-        let results: [Result<UpdateCheckResult, Error>] = [.success(.upToDate), .success(.available(available)),
-                                                         .success(.noReleases), .failure(UpdateCheckError.timedOut)]
+        let updateWindow = UpdateWindowController()
         for screen in NSScreen.screens {
-            for result in results {
-                app.updateResultForChecks(result, on: screen)
-                checkCentered(app.updateAlertForChecks!.window, on: screen)
-                app.dismissUpdateForChecks()
-            }
+            updateWindow.show(title: "Aktualizacja AimDrop", message: "Oczekiwanie na zakończenie bieżących operacji…", working: true,
+                              cancelTitle: "Anuluj aktualizację", cancel: {})
+            WindowPlacement.center(updateWindow.window!, on: screen)
+            checkCentered(updateWindow.window!, on: screen)
+            updateWindow.close()
         }
 
         let settings = app.showSettingsForChecks()
         checkCentered(settings.window!, on: WindowPlacement.activeScreen()!)
-        // An update result arriving while the folder sheet is open keeps its
-        // target display and waits until the sheet closes.
+        // The separate updater window must not dismiss the existing picker.
         let controls = descendants(settings.window!.contentView!)
         let automatic = controls.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "automaticSave" }!
         automatic.performClick(nil)
@@ -55,17 +50,15 @@ import Cocoa
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
         precondition(settings.window?.attachedSheet is NSOpenPanel)
-        let target = NSScreen.screens.last!
-        app.updateResultForChecks(.success(.upToDate), on: target)
-        precondition(app.updateAlertForChecks == nil)
-        precondition(!app.validateMenuItem(app.updateItemForChecks), "A deferred result must retain its display until presented")
+        updateWindow.show(title: "Aktualizacja AimDrop", message: "Oczekiwanie…", working: true, cancelTitle: "Anuluj", cancel: {})
+        precondition(settings.window?.attachedSheet is NSOpenPanel)
         (settings.window?.attachedSheet as? NSOpenPanel)?.cancel(nil)
         let deadline = Date().addingTimeInterval(3)
-        while app.updateAlertForChecks == nil && Date() < deadline {
+        while settings.isChoosingFile && Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
-        checkCentered(app.updateAlertForChecks!.window, on: target)
-        app.dismissUpdateForChecks()
+        precondition(!settings.isChoosingFile)
+        updateWindow.close()
         precondition(app.validateMenuItem(app.updateItemForChecks))
         settings.close()
 
@@ -77,7 +70,7 @@ import Cocoa
         about.close()
         precondition(app.showAboutForChecks() === about)
         checkCentered(about, on: aboutScreen)
-        print("PASS: centered update results and About panel, negative/stacked displays, deferred sheet presentation and reopening")
+        print("PASS: centered updater and About panel, negative/stacked displays, picker preservation and reopening")
     }
 
     static func descendants(_ view: NSView) -> [NSView] {

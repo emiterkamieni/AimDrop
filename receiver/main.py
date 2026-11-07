@@ -25,6 +25,8 @@ from receiver.media import load_capabilities
 from receiver.localization import configure, error_message, language_code, message
 from receiver.native import NativeReceiver
 from receiver.sessions import Sessions
+from receiver.retention import InboxMaintenance, retention_days
+from receiver.trash import MacTrash
 
 LOG = logging.getLogger("airfrajer")
 
@@ -43,13 +45,16 @@ class SaveJobs:
         self.jobs = {}
         self.tasks = set()
 
-    def start(self, ident, destination):
+    def start(self, ident, destination, token=None):
         ident = str(uuid.UUID(ident))
         with self.lock:
             if self.stopped.is_set() or ident in self.jobs:
                 return False
+            operation = self.inbox.reserve(ident, "save", token)
+            if operation is None:
+                return False
             canceled = threading.Event()
-            task = threading.Thread(target=self._save, args=(ident, destination, canceled),
+            task = threading.Thread(target=self._save, args=(ident, destination, canceled, operation),
                                     name="save-received", daemon=True)
             self.jobs[ident] = (canceled, task)
             self.tasks.add(task)
@@ -58,6 +63,7 @@ class SaveJobs:
             except Exception:
                 self.jobs.pop(ident)
                 self.tasks.discard(task)
+                self.inbox.release(ident, operation)
                 raise
         return True
 
@@ -70,7 +76,7 @@ class SaveJobs:
             job[0].set()
             return True
 
-    def _save(self, ident, destination, canceled):
+    def _save(self, ident, destination, canceled, operation):
         event = None
         fields = {}
         try:
@@ -96,6 +102,7 @@ class SaveJobs:
             # cannot inherit cancellation or be mistaken for a duplicate save.
             with self.lock:
                 self.jobs.pop(ident)
+            self.inbox.release(ident, operation)
         try:
             if not self.stopped.is_set():
                 self.emit(event, **fields)
@@ -112,6 +119,10 @@ class SaveJobs:
                 canceled.set()
         for task in tasks:
             task.join(timeout=8)
+
+    def is_busy(self):
+        with self.lock:
+            return bool(self.tasks)
 
 
 def identity(directory):
@@ -165,6 +176,9 @@ def main():
     parser.add_argument("--native-avatar", type=Path)
     parser.add_argument("--avatar-digest")
     parser.add_argument("--native-loopback", action="store_true", help="Isolated native lifecycle checks")
+    parser.add_argument("--trash-helper", type=Path)
+    parser.add_argument("--retention-days", type=int, default=7)
+    parser.add_argument("--disable-auto-trash", action="store_true")
     args = parser.parse_args()
     configure(args.language)
     # Validate here rather than argparse's type hook, which echoes invalid values.
@@ -196,7 +210,8 @@ def main():
         except (BrokenPipeError, OSError):
             stopped.set()
 
-    inbox = None if args.manual_consent else Inbox(args.state_dir / "Incoming")
+    inbox = None if args.manual_consent else Inbox(args.state_dir / "Incoming", days=retention_days(args.retention_days),
+                                                 automatic_trash=not args.disable_auto_trash)
     sessions = Sessions(emit, prepare_destination=inbox.prepare if inbox else None,
                         abandon_destination=inbox.abandon if inbox else None)
     LOG.info("Receiver startup: TLS identity")
@@ -220,8 +235,24 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     saves = SaveJobs(inbox, emit, stopped) if inbox else None
+    maintenance = InboxMaintenance(inbox, MacTrash(args.trash_helper), emit, stopped) if inbox else None
+    update_lock = threading.RLock()
+    update_request = None
+    graceful_shutdown = False
+
+    def update_idle():
+        # Admission stays closed throughout the barrier. Reservations include
+        # open pickers; tasks include their final IPC acknowledgements/cleanup.
+        if sessions.is_busy() or server.has_uploads():
+            return False
+        if inbox and inbox.has_reservations():
+            return False
+        if saves and saves.is_busy() or maintenance and maintenance.is_busy():
+            return False
+        return native is None or native.quiesce(update_request)
 
     def commands():
+        nonlocal update_request, graceful_shutdown
         try:
             for line in sys.stdin:
                 if len(line) > 65536:
@@ -229,18 +260,79 @@ def main():
                 try:
                     command = json.loads(line)
                     action = command.get("command")
-                    if action == "decision":
+                    if action == "prepare_update":
+                        request = str(uuid.UUID(command.get("request_id")))
+                        with update_lock:
+                            if update_request not in (None, request):
+                                continue
+                            update_request = request
+                            sessions.drain(True)
+                            if inbox:
+                                inbox.drain(True)
+                                maintenance.drain(True)
+                            emit("update_status", request_id=request, idle=update_idle())
+                    elif action == "cancel_update":
+                        with update_lock:
+                            if update_request and command.get("request_id") == update_request:
+                                if native:
+                                    native.resume()
+                                sessions.drain(False)
+                                if inbox:
+                                    inbox.drain(False)
+                                    maintenance.drain(False)
+                                update_request = None
+                                emit("update_canceled", request_id=command["request_id"])
+                    elif action == "shutdown_when_idle":
+                        with update_lock:
+                            if command.get("request_id") == update_request and update_request and update_idle():
+                                graceful_shutdown = True
+                                break
+                            emit("update_status", request_id=command.get("request_id"), idle=False)
+                    elif action == "decision":
                         sessions.decide(command.get("id"), command.get("accept") is True, command.get("directory"))
                     elif action == "pause":
                         sessions.pause(command.get("paused") is True)
                     elif action == "cancel_transfer":
                         server.cancel_transfer(command.get("id"))
                     elif action == "save" and inbox:
-                        saves.start(command.get("id"), command.get("directory"))
+                        ident = str(uuid.UUID(command.get("id")))
+                        if not saves.start(ident, command.get("directory"), command.get("token")):
+                            with saves.lock:
+                                active = ident in saves.jobs
+                            if not active:
+                                emit("error", id=ident, phase="saving", message=message("This transfer is no longer available or is busy.", "Ten transfer jest już niedostępny lub jest w trakcie operacji."))
                     elif action == "cancel_save" and inbox:
                         saves.cancel(command.get("id"))
                     elif action == "defer" and inbox:
+                        if command.get("token"):
+                            inbox.release(command.get("id"), command["token"])
                         emit("pending", transfers=inbox.list_ready())
+                    elif action == "hold_transfer" and inbox:
+                        ident = str(uuid.UUID(command.get("id")))
+                        request = str(uuid.UUID(command.get("request_id")))
+                        token = inbox.reserve(ident, "hold", request)
+                        emit("hold_result", id=ident, request_id=request, ok=token is not None, token=token)
+                    elif action == "release_transfer" and inbox:
+                        inbox.release(command.get("id"), command.get("token"))
+                    elif action == "trash" and maintenance:
+                        ident = str(uuid.UUID(command.get("id")))
+                        if not maintenance.trash(ident, command.get("token")):
+                            emit("error", id=ident, phase="trashing", message=message("This transfer is no longer available or is busy.", "Ten transfer jest już niedostępny lub jest w trakcie operacji."))
+                    elif action == "trash_many" and maintenance:
+                        request = str(uuid.UUID(command.get("request_id")))
+                        result = maintenance.trash_many(command.get("ids"))
+                        emit("trash_many_result", request_id=request, **result)
+                    elif action == "maintain_inbox" and maintenance:
+                        maintenance.wake()
+                    elif action == "set_retention" and inbox:
+                        request = str(uuid.UUID(command.get("request_id")))
+                        try:
+                            inbox.configure_retention(command.get("days"), command.get("enabled"))
+                        except ValueError as error:
+                            emit("retention_result", request_id=request, ok=False, message=error_message(error))
+                        else:
+                            emit("retention_result", request_id=request, ok=True)
+                            maintenance.wake()
                     elif action == "set_language":
                         # Presentation only: no profile update, listener restart or
                         # native command, so active transfers and pairing survive.
@@ -309,13 +401,17 @@ def main():
         emit("ready", name=server.receiver_name, port=server.server_port, **native_check,
              **(dict(avatar_digest=native.ready_fields["avatar_digest"]) if native else {}))
         if inbox:
-            emit("pending", transfers=inbox.list_ready())
+            emit("pending", initial=True, transfers=inbox.list_ready())
+            maintenance.start()
         while not stopped.wait(0.5):
             sessions.expire()
+            with update_lock:
+                if update_request:
+                    emit("update_status", request_id=update_request, idle=update_idle())
     finally:
         stopped.set()
         if native:
-            native.close()
+            native.close(graceful=graceful_shutdown)
         sessions.close()
         if advert:
             advert.close()
@@ -324,7 +420,11 @@ def main():
         server.server_close()
         if saves:
             saves.close()
+        if maintenance:
+            maintenance.close()
         lock_file.close()
+        if graceful_shutdown:
+            emit("shutdown_complete", request_id=update_request)
 
 
 if __name__ == "__main__":

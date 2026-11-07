@@ -27,6 +27,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SWIFT_PAIR = re.compile(r'(?:L10n\.(?:text|format)|setReceiverStatus)\(\s*("(?:[^"\\]|\\.)*")\s*,\s*("(?:[^"\\]|\\.)*")')
 PLURALS = {
+    "items": (("%ld item", "%ld items", "%ld items", "%ld items"), ("%ld element", "%ld elementy", "%ld elementów", "%ld elementów")),
     "files": (("%ld file", "%ld files", "%ld files", "%ld files"), ("%ld plik", "%ld pliki", "%ld plików", "%ld plików")),
     "photos": (("%ld photo", "%ld photos", "%ld photos", "%ld photos"), ("%ld zdjęcie", "%ld zdjęcia", "%ld zdjęć", "%ld zdjęć")),
     "videos": (("%ld video", "%ld videos", "%ld videos", "%ld videos"), ("%ld wideo",) * 4),

@@ -28,6 +28,8 @@ final class NativeFileService: @unchecked Sendable {
     var peer: RPPairingDistributedActor?
     var connections: [NWConnection] = []
     var requests: [HTTP3BackendRequest] = []
+    private var accepting = true
+    private var drained: (() -> Void)?
     var identity: RPPairingTemporaryIdentity?
     let backend: LocalReceiverBackend
     let spoolDirectory: URL?
@@ -49,6 +51,7 @@ final class NativeFileService: @unchecked Sendable {
         self.listener = listener
         guard AFSetListenerPairingService(listener.nw, name, pin) else { throw ProbeError.stage("native pairing descriptor") }
         listener.newConnectionHandler = { connection in
+            guard self.accepting else { connection.cancel(); return }
             self.connections.append(connection)
             print("native_http3_incoming")
             let request = HTTP3BackendRequest(connection: connection, backend: self.backend, identity: self.identity, queue: self.queue, spoolDirectory: self.spoolDirectory)
@@ -56,6 +59,7 @@ final class NativeFileService: @unchecked Sendable {
             request.onFinish = { [weak self, weak request, weak connection] in
                 self?.requests.removeAll { $0 === request }
                 self?.connections.removeAll { $0 === connection }
+                self?.checkDrained()
             }
             connection.stateUpdateHandler = { [weak request] state in
                 print("native_http3_state=\(state)")
@@ -132,6 +136,31 @@ final class NativeFileService: @unchecked Sendable {
             self.connections.removeAll(); self.requests.removeAll()
             self.backend.session.invalidateAndCancel()
         }
+    }
+
+    func quiesce(_ completion: @escaping () -> Void) {
+        queue.async {
+            self.accepting = false
+            self.drained = completion
+            // HTTP3 peers may pre-open idle streams without sending a request.
+            // The worker calls this only after all accepted uploads finish;
+            // these unclaimed streams are not transfers and must not hold the
+            // restart barrier forever. Keep actual response sends until ACK.
+            for request in self.requests.filter({ $0.path == nil }) { request.cancel() }
+            self.checkDrained()
+        }
+    }
+    private func checkDrained() {
+        guard !accepting, requests.isEmpty, let callback = drained else { return }
+        drained = nil
+        callback()
+    }
+    func resume() {
+        queue.async { self.drained = nil; self.accepting = true }
+    }
+    func stopAndWait() async {
+        stop()
+        await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
     }
 }
 
@@ -254,7 +283,10 @@ final class HTTP3BackendRequest: @unchecked Sendable {
     }
 
     func cancel() {
-        guard !finished else { return }
+        // A terminal connection failure may race the response-send callback.
+        // Release its drain reservation exactly once even after reply() marked
+        // the request finished. No successful response is cut short here.
+        guard !finished else { onFinish?(); onFinish = nil; return }
         finished = true
         upload?.cancel()
         task?.cancel()

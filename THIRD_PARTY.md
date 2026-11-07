@@ -32,11 +32,17 @@ own consent coordinator, streaming archive reader and native AppKit interface.
 It does not include upstream's automatic acceptance or partial-file salvage.
 
 AimDrop's source is released under GPL-3.0-only. The full license is in LICENSE.
-Runtime dependencies are Python's standard library and system macOS frameworks.
+Runtime dependencies are Python's standard library, Sparkle and system macOS frameworks.
 Development builds can use the Python interpreter used for the build. Portable
 releases bundle a pinned CPython runtime from astral-sh/python-build-standalone,
 including its original licenses and upstream dependency/source notices.
 See docs/distribution.md and Contents/Resources/python/licenses in the release.
+
+The bundled **Sparkle 2.10.1** updater is from
+https://github.com/sparkle-project/Sparkle/releases/tag/2.10.1.
+Sparkle is distributed under the MIT license and includes third-party notices
+in `Contents/Resources/Sparkle-LICENSE`. The official universal framework and nested helper
+signatures are retained; AimDrop and its own helpers are signed ad hoc.
 
 The local build optionally queries the installed PhotosFormats framework for
 media capabilities. Only its Version, Codecs and ContainerFormats tables are

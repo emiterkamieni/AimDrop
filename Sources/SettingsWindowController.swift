@@ -41,6 +41,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let folderLabel = NSTextField(labelWithString: "Nie wybrano folderu")
     private let chooseButton = NSButton(title: "Wybierz…", target: nil, action: nil)
     private let soundButton = NSButton(checkboxWithTitle: "Dźwięk po zapisaniu plików", target: nil, action: nil)
+    private let automaticTrashButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let retentionDaysField = NSTextField(string: "7")
+    private let retentionDaysLabel = NSTextField(labelWithString: "")
+    private let retentionHint = NSTextField(wrappingLabelWithString: "")
     private let loginItemButton = NSButton(checkboxWithTitle: "Uruchamiaj przy logowaniu", target: nil, action: nil)
     private let loginItemSettingsButton = NSButton(title: "Ustawienia macOS…", target: nil, action: nil)
     private let loginItemStatus = NSTextField(wrappingLabelWithString: "")
@@ -52,12 +56,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private var destination: SaveDestination?
     private var avatarPNG: Data?
     private let avatarPreview = AvatarPreviewView()
-    private let avatarButton = NSButton(title: "Wybierz zdjęcie…", target: nil, action: nil)
-    private let resetAvatarButton = NSButton(title: "Przywróć logo", target: nil, action: nil)
+    private let avatarButton = NSButton(title: "", target: nil, action: nil)
+    private let resetAvatarButton = NSButton(title: "", target: nil, action: nil)
     private var cropController: AvatarCropWindowController?
     private let imageQueue = DispatchQueue(label: "pl.airfolder.avatar", qos: .userInitiated)
     private var picker: NSOpenPanel?
-    private var hasUnsavedChanges = false
+    private(set) var hasUnsavedChanges = false
+    private var updatePrompt: UpdateWindowController?
+    private(set) var frozenForUpdate = false
     private(set) var isChoosingFile = false
     var onSave: ((AppPreferences) -> Bool)?
     var canChooseFile: (() -> Bool)?
@@ -77,6 +83,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func buildContent() {
         guard let content = window?.contentView else { return }
+        for button in [avatarButton, resetAvatarButton, chooseButton, loginItemSettingsButton, closeButton, saveButton] {
+            ActionButtonStyle.apply(to: button)
+        }
         let stack = NSStackView()
         contentStack = stack
         stack.orientation = .vertical
@@ -107,15 +116,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
         avatarButton.target = self; avatarButton.action = #selector(chooseAvatar)
         resetAvatarButton.target = self; resetAvatarButton.action = #selector(resetAvatar)
-        avatarButton.bezelStyle = .rounded; resetAvatarButton.bezelStyle = .rounded
         avatarPreview.setAccessibilityElement(true)
         avatarPreview.setAccessibilityRole(.image)
         avatarPreview.identifier = NSUserInterfaceItemIdentifier("avatarPreview")
         let avatarButtons = NSStackView(views: [avatarButton, resetAvatarButton]); avatarButtons.spacing = 8
-        for button in [avatarButton, resetAvatarButton] {
-            button.controlSize = .small
-            button.font = .systemFont(ofSize: 12)
-        }
         nameLabel.font = .systemFont(ofSize: 12, weight: .medium)
         nameLabel.textColor = .secondaryLabelColor
         nameField.placeholderString = "AimDrop"
@@ -154,7 +158,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         folderLabel.font = .systemFont(ofSize: 12)
         chooseButton.target = self
         chooseButton.action = #selector(chooseFolder)
-        chooseButton.bezelStyle = .rounded
         folderRow.addArrangedSubview(folderLabel)
         folderRow.addArrangedSubview(chooseButton)
         folderRow.alignment = .centerY
@@ -172,6 +175,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         soundButton.target = self
         soundButton.action = #selector(changed)
         receiving.addArrangedSubview(soundButton)
+        addDivider(to: receiving)
+        automaticTrashButton.target = self
+        automaticTrashButton.action = #selector(retentionChanged)
+        automaticTrashButton.identifier = NSUserInterfaceItemIdentifier("automaticTrash")
+        receiving.addArrangedSubview(automaticTrashButton)
+        retentionDaysField.delegate = self
+        retentionDaysField.identifier = NSUserInterfaceItemIdentifier("retentionDays")
+        retentionDaysField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        let retentionRow = NSStackView(views: [retentionDaysLabel, retentionDaysField])
+        retentionRow.spacing = 8
+        retentionRow.alignment = .centerY
+        receiving.addArrangedSubview(retentionRow)
+        styleHint(retentionHint)
+        receiving.addArrangedSubview(retentionHint)
+        retentionHint.widthAnchor.constraint(equalTo: receiving.widthAnchor).isActive = true
 
         applicationLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         stack.addArrangedSubview(applicationLabel)
@@ -196,9 +214,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         loginItemButton.identifier = NSUserInterfaceItemIdentifier("launchAtLogin")
         loginItemSettingsButton.target = self
         loginItemSettingsButton.action = #selector(openLoginItemSettings)
-        loginItemSettingsButton.bezelStyle = .rounded
-        loginItemSettingsButton.controlSize = .small
-        loginItemSettingsButton.font = .systemFont(ofSize: 11)
         loginItemSettingsButton.isHidden = true
         application.addArrangedSubview(loginItemButton)
         application.addArrangedSubview(loginItemSettingsButton)
@@ -228,9 +243,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         feedback.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         closeButton.target = self
         closeButton.action = #selector(closeSettings)
-        closeButton.bezelStyle = .rounded
         closeButton.keyEquivalent = "\u{1b}"
-        saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
         saveButton.target = self
         saveButton.action = #selector(save)
@@ -246,9 +259,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor),
-            closeButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
-            saveButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 80)
+            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor)
         ])
         relocalize()
     }
@@ -296,8 +307,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         nameLabel.stringValue = L10n.text("AirDrop name", "Nazwa w AirDrop")
         nameField.setAccessibilityLabel(L10n.text("AirDrop receiver name", "Nazwa widoczna w AirDrop"))
         avatarPreview.setAccessibilityLabel(L10n.text("AirDrop receiver avatar", "Awatar odbiorcy w AirDrop"))
-        avatarButton.title = L10n.text("Choose image…", "Wybierz zdjęcie…")
-        resetAvatarButton.title = L10n.text("Reset logo", "Przywróć logo")
+        avatarButton.title = L10n.text("Change avatar", "Zmień awatar")
+        resetAvatarButton.title = L10n.text("Restore default", "Przywróć domyślny")
         nameHint.stringValue = L10n.text("Changing the name or avatar requires a new PIN.", "Zmiana nazwy lub awatara wymaga nowego PIN-u.")
         saveLabel.stringValue = L10n.text("Save received files", "Zapisywanie odebranych plików")
         askToSaveButton.title = L10n.text("Ask for a folder after each transfer", "Pytaj o folder po każdym odbiorze")
@@ -305,6 +316,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         chooseButton.title = L10n.text("Choose…", "Wybierz…")
         folderHint.stringValue = L10n.text("Files you haven't saved stay in the inbox.", "Pliki oczekujące na zapis pozostają w buforze.")
         soundButton.title = L10n.text("Play a sound after saving", "Dźwięk po zapisaniu plików")
+        automaticTrashButton.title = L10n.text("Automatically move unsaved transfers to Trash", "Automatycznie przenoś niezapisane transfery do Kosza")
+        retentionDaysLabel.stringValue = L10n.text("Keep for this many days:", "Liczba dni przechowywania:")
+        retentionDaysField.setAccessibilityLabel(retentionDaysLabel.stringValue)
+        retentionHint.stringValue = L10n.text("A new number of days applies to future transfers. Turning this off pauses automatic deletion; turning it back on uses the saved deadlines.", "Nowa liczba dni dotyczy kolejnych transferów. Wyłączenie wstrzymuje automatyczne usuwanie; ponowne włączenie przywraca zapisane terminy.")
         loginItemButton.title = L10n.text("Launch at login", "Uruchamiaj przy logowaniu")
         loginItemSettingsButton.title = L10n.text("macOS Settings…", "Ustawienia macOS…")
         languageLabel.stringValue = L10n.text("Language", "Język")
@@ -349,6 +364,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             refreshAvatar()
             soundButton.state = preferences.completionSound ? .on : .off
             updateNotificationsButton.state = preferences.updateNotifications ? .on : .off
+            automaticTrashButton.state = preferences.automaticTrash ? .on : .off
+            retentionDaysField.stringValue = String(preferences.retentionDays)
             languageMenu.selectItem(at: languageChoices.firstIndex(of: preferences.language) ?? 0)
             loginItemDraft = nil
             loginItemError = nil
@@ -396,6 +413,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     @objc private func changed() { hasUnsavedChanges = true; saveButton.isEnabled = true; setStatus("") }
+    @objc private func retentionChanged() { changed() }
     @objc private func loginItemChanged() {
         loginItemDraft = loginItemButton.state == .on
         loginItemError = nil
@@ -523,13 +541,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     @objc private func save() {
         guard !isChoosingFile else { return }
         do {
+            guard let days = Int(retentionDaysField.stringValue.trimmingCharacters(in: .whitespaces)), (1...36500).contains(days) else {
+                throw PreferenceError(message: L10n.text("Enter a whole number of days between 1 and 36500.", "Podaj całkowitą liczbę dni od 1 do 36500."))
+            }
             let preferences = try AppPreferences(receiverName: nameField.stringValue,
                                                   automaticSave: automaticSaveButton.state == .on,
                                                   destination: destination,
                                                   completionSound: soundButton.state == .on,
                                                   avatarPNG: avatarPNG,
                                                   language: languageChoices[max(0, languageMenu.indexOfSelectedItem)],
-                                                  updateNotifications: updateNotificationsButton.state == .on).validated()
+                                                  updateNotifications: updateNotificationsButton.state == .on,
+                                                  automaticTrash: automaticTrashButton.state == .on,
+                                                  retentionDays: days).validated()
             nameField.stringValue = preferences.receiverName
             hasUnsavedChanges = false
             saveButton.isEnabled = false
@@ -555,4 +578,34 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     @objc private func closeSettings() { if !isChoosingFile { close() } }
     func windowShouldClose(_ sender: NSWindow) -> Bool { !isChoosingFile }
+
+    /// Called only after the current picker/crop operation finishes. Preserve
+    /// the draft on validation, persistence or login-registration failure.
+    func resolveForUpdate(_ completion: @escaping (Bool) -> Void) {
+        guard !isChoosingFile, updatePrompt == nil else { completion(false); return }
+        if window?.isVisible != true || !hasUnsavedChanges {
+            frozenForUpdate = true; close(); completion(true); return
+        }
+        let prompt = UpdateWindowController()
+        updatePrompt = prompt
+        let finish: (Bool) -> Void = { [weak self, weak prompt] accepted in
+            prompt?.close(); self?.updatePrompt = nil
+            self?.frozenForUpdate = accepted
+            if accepted { self?.close() }
+            completion(accepted)
+        }
+        prompt.show(title: L10n.text("Unsaved settings", "Niezapisane ustawienia"),
+                    message: L10n.text("Save your changes before restarting AimDrop?", "Zapisać zmiany przed ponownym uruchomieniem AimDrop?"),
+                    actionTitle: L10n.text("Save", "Zapisz"), action: { [weak self] in
+            guard let self else { finish(false); return }
+            self.save()
+            finish(!self.hasUnsavedChanges)
+        }, cancelTitle: L10n.text("Cancel Update", "Anuluj aktualizację"), cancel: { finish(false) },
+                    extraTitle: L10n.text("Discard", "Odrzuć"), extra: { [weak self] in
+            self?.hasUnsavedChanges = false; finish(true)
+        })
+    }
+    func cancelUpdatePreparation() {
+        updatePrompt?.close(); updatePrompt = nil; frozenForUpdate = false
+    }
 }

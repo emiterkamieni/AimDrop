@@ -5,17 +5,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let nameLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let saveLatestItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let pendingMenu = PendingTransfersMenu()
     private let updateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var statusText: () -> String = { L10n.text("Starting…", "Uruchamianie…") }
     private var activeLanguageCode = ""
-    private lazy var updater = UpdateChecker()
-    private var checkingForUpdates = false
-    private var updateAlert: NSAlert?
-    private var updatePresentationScreen: NSScreen?
+    private lazy var sparkleUpdater = SparkleUpdateController()
+    private lazy var updater = UpdateChecker(canProbe: { [weak self] in self?.sparkleUpdater.busy == false },
+                                             probe: { [weak self] completion in self?.sparkleUpdater.probe(completion) })
+    private let updateRestart = UpdateRestartCoordinator()
+    private var settingsResolvedForUpdate = false
+    private var resolvingUpdateSettings = false
+    private var updateSettingsFailed = false
+    private var languageRequestID: String?
     private weak var aboutWindow: NSWindow?
-    private var updateDownloadURL: URL?
-    private var deferredUpdateResult: Result<UpdateCheckResult, Error>?
     private var worker: Process?
     private var input: FileHandle?
     private var outputPipe: Pipe?
@@ -23,10 +25,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var panel: NSOpenPanel?
     private var currentOffer: String?
     private var pendingTransfers: [String: [String: Any]] = [:]
-    private var latestReceivedID: String?
     private var pendingOrder: [String] = []
     private var promptedTransfers = Set<String>()
     private var savingTransfers = Set<String>()
+    private var trashingTransfers = Set<String>()
+    private var trashFailures = Set<String>()
+    private enum HoldAction { case save, trash, automatic(SaveDestination) }
+    private var holdRequests: [String: (id: String, action: HoldAction)] = [:]
+    private var heldTransfers: [String: String] = [:]
+    private var choosingRequest: String?
+    private var trashAlert: NSAlert?
+    private var trashOfferID: String?
+    private var trashAllOfferIDs: [String] = []
+    private var bulkTrashRequests: [String: Set<String>] = [:]
+    private var retentionRequestID: String?
     private var completedTransfers = Set<String>()
     private var handledDownloads = Set<String>()
     private var manuallyHandledTransfers = Set<String>()
@@ -44,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var appliedAvatarDigest: String?
     private var pendingProfileRequest: (id: String, name: String, digest: String)?
     private var workerReady = false
+    private var inboxLoaded = false
     private let destinationQueue = DispatchQueue(label: "pl.airfolder.destination", qos: .utility)
     private let ioQueue = DispatchQueue(label: "pl.airfrajer.events")
     private var buffer = Data()
@@ -59,9 +72,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     #if AIRFOLDER_CHECKS
     private var commandForChecks: (([String: Any]) -> Bool)?
     private var storageForChecks: URL?
+    private var automaticHoldsForChecks = true
     #endif
 
     private var supportDirectory: URL {
+        #if AIMDROP_UPDATE_EXPERIMENT
+        if let config = Bundle.main.object(forInfoDictionaryKey: "AimDropUpdateExperiment") as? [String: String], let path = config["state"] {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        #endif
         #if AIRFOLDER_CHECKS
         if let storageForChecks { return storageForChecks }
         #endif
@@ -76,6 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.setActivationPolicy(.accessory)
         NSApp.applicationIconImage = AimDropArtwork.applicationIcon
         setupMenu()
+        let existingInstallation = preferenceStore.hasSavedPreferences
+            || FileManager.default.fileExists(atPath: supportDirectory.path)
         do {
             try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
             let logURL = supportDirectory.appendingPathComponent("receiver.log")
@@ -84,13 +105,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             logHandle = try FileHandle(forWritingTo: logURL)
             logHandle?.seekToEndOfFile()
+            do {
+                #if AIMDROP_UPDATE_EXPERIMENT
+                if let config = Bundle.main.object(forInfoDictionaryKey: "AimDropUpdateExperiment") as? [String: String], config["install"] == "yes", let login = config["login"] {
+                    try LoginItemManager.system.setEnabled(login == "on")
+                }
+                #endif
+                try LoginItemManager.system.enableByDefaultIfNeeded(existingInstallation: existingInstallation)
+            } catch {
+                log("Default login item registration failed")
+                setSettingsStatus(L10n.format("Could not change launch at login: %@", "Nie udało się zmienić autostartu: %@", error.localizedDescription), error: true)
+            }
             log("Login item status=\(LoginItemManager.system.status().rawValue)")
             notifications.log = { [weak self] message in self?.log(message) }
             progressBanners.log = { [weak self] message in self?.log(message) }
             notifications.setUpdateNotificationsEnabled(preferences.updateNotifications)
             notifications.start()
             notifications.onSavePending = { [weak self] id in self?.requestSave(id: id) }
-            notifications.onOpenUpdate = { url in NSWorkspace.shared.open(url) }
+            notifications.onOpenUpdate = { [weak self] _ in self?.checkForUpdates() }
             progressBanners.onCancel = { [weak self] id, saving in
                 guard let self = self else { return }
                 self.send(["command": saving ? "cancel_save" : "cancel_transfer", "id": id])
@@ -100,13 +132,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             showError(L10n.text("Could not start the receiver", "Nie można uruchomić odbiornika"), error.localizedDescription)
             setReceiverStatus("Startup failed", "Błąd uruchamiania")
         }
+        configureUpdates()
         updater.onAvailableUpdate = { [weak self] update in
             guard let self, !self.quitting, self.preferences.updateNotifications else { return }
             self.notifications.updateAvailable(version: update.version, url: update.downloadURL) { [weak self] delivered in
                 if delivered { self?.updater.markNotified(update) }
             }
         }
+        #if AIMDROP_UPDATE_EXPERIMENT
+        startUpdateExperiment()
+        #else
         updater.start()
+        #endif
         NotificationCenter.default.addObserver(self, selector: #selector(systemLanguageOrWakeChanged), name: NSLocale.currentLocaleDidChangeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemLanguageOrWakeChanged), name: NSWorkspace.didWakeNotification, object: nil)
     }
@@ -124,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             L10n.configure(self.preferences.language)
             self.refreshLanguage()
             self.updater.checkIfDue()
+            if self.workerReady { self.send(["command": "maintain_inbox"]) }
         }
     }
 
@@ -142,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         setupMenu()
         settingsWindow?.relocalize()
         notifications.refreshCategories()
-        if workerReady { send(["command": "set_language", "language": code, "request_id": UUID().uuidString]) }
+        if workerReady { synchronizeLanguage() }
     }
 
     private func setupMenu() {
@@ -154,19 +192,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
         refreshReceiverName()
         statusLine.title = statusText()
-        saveLatestItem.title = L10n.text("Save Files…", "Zapisz pliki…")
         menu.addItem(nameLine)
         menu.addItem(statusLine)
         menu.addItem(.separator())
-        saveLatestItem.target = self
-        saveLatestItem.action = #selector(saveLatestFiles)
-        saveLatestItem.isHidden = latestSavableID == nil
-        menu.addItem(saveLatestItem)
+        pendingMenu.onSave = { [weak self] id in self?.requestSave(id: id) }
+        pendingMenu.onTrash = { [weak self] id in self?.requestTrash(id: id) }
+        pendingMenu.onTrashAll = { [weak self] ids in self?.requestTrashAll(ids: ids) }
+        pendingMenu.canAct = { [weak self] id in self?.canHandleTransfer(id) ?? false }
+        refreshPendingMenu()
+        menu.addItem(pendingMenu.item)
         addItem(L10n.text("Show Last Folder", "Pokaż ostatni folder"), #selector(openLastFolder), to: menu)
         menu.addItem(.separator())
         let settings = addItem(L10n.text("Settings…", "Ustawienia…"), #selector(showSettings), to: menu)
         settings.keyEquivalent = ","
-        updateItem.title = checkingForUpdates ? L10n.text("Checking…", "Sprawdzanie…") : L10n.text("Check for Updates…", "Sprawdź aktualizacje…")
+        updateItem.title = L10n.text("Check for Updates…", "Sprawdź aktualizacje…")
         updateItem.target = self
         updateItem.action = #selector(checkForUpdates)
         menu.addItem(updateItem)
@@ -221,8 +260,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                              "--name=\(receiverName)", "--language", L10n.languageCode, "--state-dir", supportDirectory.path,
                              "--native-helper", resources.deletingLastPathComponent().appendingPathComponent("MacOS/AimDropReceiver").path,
                              "--native-artwork", resources.appendingPathComponent("AimDropAvatar.png").path,
-                             "--avatar-digest", avatar.digest]
+                             "--avatar-digest", avatar.digest,
+                             "--trash-helper", resources.deletingLastPathComponent().appendingPathComponent("MacOS/AimDropTrash").path,
+                             "--retention-days", String(preferences.retentionDays)]
+        if !preferences.automaticTrash { process.arguments?.append("--disable-auto-trash") }
         if let avatarPath { process.arguments?.append(contentsOf: ["--native-avatar", avatarPath]) }
+        #if AIMDROP_UPDATE_EXPERIMENT
+        process.arguments?.append("--native-loopback")
+        #endif
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         process.standardInput = stdinPipe
@@ -241,11 +286,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         process.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
                 guard let self = self, !self.quitting else { return }
+                if self.updateRestart.active {
+                    self.workerReady = false
+                    self.updateRestart.workerExited(success: proc.terminationStatus == 0)
+                    return
+                }
                 self.workerReady = false
                 self.pairingWindow.close()
                 self.pendingProfileRequest = nil
                 self.savingTransfers.removeAll()
-                self.refreshLatestSaveItem()
+                self.trashingTransfers.removeAll()
+                self.holdRequests.removeAll()
+                self.heldTransfers.removeAll()
+                self.choosingRequest = nil
+                self.trashAlert?.window.close()
+                self.trashAlert = nil; self.trashOfferID = nil
+                self.trashAllOfferIDs.removeAll(); self.bulkTrashRequests.removeAll()
+                self.pendingMenu.hidePreview()
+                self.refreshPendingMenu()
                 self.setSettingsStatus(L10n.text("The receiver is stopped. Settings will be used the next time it starts.", "Odbiornik jest zatrzymany. Ustawienia zostaną użyte przy następnym uruchomieniu."))
                 self.panel?.cancel(nil)
                 self.progressBanners.closeAll()
@@ -299,7 +357,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @discardableResult private func send(_ message: [String: Any]) -> Bool {
         #if AIRFOLDER_CHECKS
-        if let commandForChecks = commandForChecks { return commandForChecks(message) }
+        if let commandForChecks = commandForChecks {
+            let accepted = commandForChecks(message)
+            if accepted, automaticHoldsForChecks, message["command"] as? String == "hold_transfer" {
+                DispatchQueue.main.async { [weak self] in
+                    self?.receive(["event": "hold_result", "id": message["id"]!, "request_id": message["request_id"]!,
+                                   "ok": true, "token": UUID().uuidString.lowercased()])
+                }
+            }
+            return accepted
+        }
         #endif
         guard let input = input, worker?.isRunning == true,
               var data = try? JSONSerialization.data(withJSONObject: message) else { return false }
@@ -309,9 +376,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func receive(_ event: [String: Any]) {
-        defer { refreshLatestSaveItem() }
-        if event.keys.contains("latest_received_id") {
-            latestReceivedID = event["latest_received_id"] as? String
+        defer { refreshPendingMenu(); updateRestart.advance() }
+        if ["update_status", "shutdown_complete"].contains(event["event"] as? String ?? "") {
+            updateRestart.receive(event); return
+        }
+        if let id = event["id"] as? String, completedTransfers.contains(id),
+           event["event"] as? String != "hold_result" {
+            return
         }
         switch event["event"] as? String {
         case "pairing_pin":
@@ -320,13 +391,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             pairingWindow.close()
         case "ready":
             workerReady = true
+            #if AIMDROP_UPDATE_EXPERIMENT
+            if let config = Bundle.main.object(forInfoDictionaryKey: "AimDropUpdateExperiment") as? [String: String] {
+                let report = "build=\(config["build"]!) login=\(LoginItemManager.system.status().rawValue) path=\(Bundle.main.bundlePath)"
+                try? Data(report.utf8).write(to: supportDirectory.appendingPathComponent("ready-" + config["build"]!), options: .atomic)
+            }
+            #endif
             appliedReceiverName = event["name"] as? String
             appliedAvatarDigest = event["avatar_digest"] as? String
             refreshReceiverName()
             setReceiverStatus("Ready to receive", "Gotowy do odbioru")
-            send(["command": "set_language", "language": L10n.languageCode, "request_id": UUID().uuidString])
+            synchronizeLanguage()
+            synchronizeRetention()
             if appliedReceiverName != receiverName || appliedAvatarDigest != (try? selectedAvatar(preferences).digest) { synchronizeReceiverProfile() }
             presentNextPending()
+        case "hold_result":
+            guard let request = event["request_id"] as? String else { return }
+            let waiting = holdRequests.removeValue(forKey: request)
+            if choosingRequest == request { choosingRequest = nil }
+            guard let waiting, pendingTransfers[waiting.id] != nil, !completedTransfers.contains(waiting.id) else {
+                if let id = event["id"] as? String, let token = event["token"] as? String {
+                    send(["command": "release_transfer", "id": id, "token": token])
+                }
+                return
+            }
+            guard event["ok"] as? Bool == true, let token = event["token"] as? String else {
+                saveCouldNotStart(id: waiting.id)
+                showError("AimDrop", L10n.text("This transfer is no longer available or is busy.", "Ten transfer jest już niedostępny lub jest w trakcie operacji."))
+                return
+            }
+            heldTransfers[waiting.id] = token
+            switch waiting.action {
+            case .save:
+                if panel == nil && trashAlert == nil && errorAlert == nil && settingsWindow?.isChoosingFile != true {
+                    presentFolder(pendingTransfers[waiting.id]!)
+                } else {
+                    releaseTransfer(waiting.id)
+                    promptedTransfers.remove(waiting.id)
+                }
+            case .trash: presentTrashConfirmation(id: waiting.id)
+            case .automatic(let destination): beginAutomaticSave(id: waiting.id, destination: destination)
+            }
+        case "retention_result":
+            guard event["request_id"] as? String == retentionRequestID else { return }
+            retentionRequestID = nil
+            if event["ok"] as? Bool != true {
+                setSettingsStatus(event["message"] as? String ?? L10n.text("Could not update inbox settings.", "Nie udało się zmienić ustawień bufora."), error: true)
+            }
+        case "language_result":
+            guard event["request_id"] as? String == languageRequestID else { return }
+            languageRequestID = nil
+            if event["ok"] as? Bool != true { setSettingsStatus(L10n.text("The receiver did not respond. Try again.", "Odbiornik nie odpowiedział. Spróbuj ponownie."), error: true) }
+        case "trashing":
+            if let id = event["id"] as? String { trashingTransfers.insert(id) }
+        case "trashed":
+            if let id = event["id"] as? String {
+                completedTransfers.insert(id)
+                removePending(id)
+                notifications.cancel(id: id)
+                progressBanners.remove(id: id)
+            }
+        case "trash_canceled":
+            if let id = event["id"] as? String { trashingTransfers.remove(id) }
+        case "trash_many_result":
+            if let request = event["request_id"] as? String { bulkTrashRequests.removeValue(forKey: request) }
         case "profile_result":
             guard workerReady, let request = event["request_id"] as? String,
                   let pending = pendingProfileRequest, request == pending.id else { return }
@@ -349,11 +477,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             for transfer in event["transfers"] as? [[String: Any]] ?? [] {
                 registerPending(transfer, automatic: false)
             }
+            if event["initial"] as? Bool == true {
+                inboxLoaded = true
+                notifications.reconcilePending(ids: Set(pendingTransfers.keys))
+                if let id = requestedSaveID, pendingTransfers[id] == nil {
+                    requestedSaveID = nil
+                    notifications.cancel(id: id)
+                }
+            }
             if let id = requestedSaveID, pendingTransfers[id] != nil { requestSave(id: id) }
         case "downloaded":
             guard let id = event["id"] as? String, !completedTransfers.contains(id),
                   handledDownloads.insert(id).inserted else { return }
-            if !event.keys.contains("latest_received_id") { latestReceivedID = id }
             let routeNewDownload = !manuallyHandledTransfers.contains(id)
                 && currentOffer != id && !savingTransfers.contains(id)
             registerPending(event, automatic: routeNewDownload)
@@ -361,7 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 if !savingTransfers.contains(id) { progressBanners.finish(id: id) }
                 return
             }
-            if preferences.automaticSave, let destination = preferences.destination {
+            if !updateRestart.active, preferences.automaticSave, let destination = preferences.destination {
                 progressBanners.finish(id: id, awaitingDestination: false)
                 saveAutomatically(id: id, destination: destination)
             } else {
@@ -403,9 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if let id = event["id"] as? String { progressBanners.update(id: id, progress: progress) }
         case "complete":
             guard let id = event["id"] as? String, completedTransfers.insert(id).inserted else { return }
-            savingTransfers.remove(id)
-            pendingTransfers.removeValue(forKey: id)
-            pendingOrder.removeAll { $0 == id }
+            removePending(id)
             if let path = event["directory"] as? String {
                 lastFolder = URL(fileURLWithPath: path)
                 UserDefaults.standard.set(path, forKey: "LastDirectory")
@@ -419,7 +552,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 if preferences.completionSound { NSSound(named: "Glass")?.play() }
             }
         case "error":
+            if event["phase"] as? String == "trashing", let id = event["id"] as? String {
+                trashingTransfers.remove(id)
+                releaseTransfer(id)
+                let first = trashFailures.insert(id).inserted
+                if event["automatic"] as? Bool != true || first {
+                    showError("AimDrop", event["message"] as? String ?? L10n.text("Could not move the transfer to Trash. The files remain in the inbox.", "Nie udało się przenieść transferu do Kosza. Pliki pozostają w buforze."))
+                }
+                return
+            }
             if let id = event["id"] as? String {
+                releaseTransfer(id)
                 progressBanners.remove(id: id)
                 savingTransfers.remove(id)
                 if event["phase"] as? String == "saving", let transfer = pendingTransfers[id] {
@@ -440,6 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             setReceiverStatus("Transfer canceled", "Odbieranie anulowane")
         case "save_canceled":
             if let id = event["id"] as? String {
+                releaseTransfer(id)
                 progressBanners.remove(id: id)
                 savingTransfers.remove(id)
                 if let transfer = pendingTransfers[id] {
@@ -463,41 +607,149 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem === updateItem { return !checkingForUpdates && updateAlert == nil && deferredUpdateResult == nil }
-        if menuItem === saveLatestItem {
-            return latestSavableID != nil && workerReady && panel == nil
-                && settingsWindow?.isChoosingFile != true && errorAlert == nil && updateAlert == nil
-        }
+        if menuItem === updateItem { return true }
+        if menuItem.action == #selector(showSettings) { return !updateRestart.active }
         if menuItem.action == #selector(openLastFolder) {
             return lastFolder != nil || UserDefaults.standard.string(forKey: "LastDirectory") != nil
         }
         return true
     }
 
-    private var latestSavableID: String? {
-        guard let id = latestReceivedID, pendingTransfers[id] != nil,
-              promptedTransfers.contains(id), !completedTransfers.contains(id),
-              !savingTransfers.contains(id), currentOffer != id else { return nil }
-        return id
+    private func canHandleTransfer(_ id: String) -> Bool {
+        !updateRestart.active && workerReady && pendingTransfers[id] != nil && !completedTransfers.contains(id)
+            && !savingTransfers.contains(id) && !trashingTransfers.contains(id) && heldTransfers[id] == nil
+            && !bulkTrashRequests.values.contains(where: { $0.contains(id) })
+            && panel == nil && trashAlert == nil && choosingRequest == nil
+            && settingsWindow?.isChoosingFile != true && errorAlert == nil
     }
-    private func refreshLatestSaveItem() {
-        saveLatestItem.isHidden = latestSavableID == nil
-        saveLatestItem.isEnabled = validateMenuItem(saveLatestItem)
+    private func refreshPendingMenu() {
+        let requested = bulkTrashRequests.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+        pendingMenu.update(Array(pendingTransfers.values), saving: savingTransfers,
+                           trashing: trashingTransfers.union(requested), automaticTrash: preferences.automaticTrash)
     }
-    @objc private func saveLatestFiles() {
-        guard validateMenuItem(saveLatestItem), let id = latestSavableID else { return }
-        requestSave(id: id)
+    private func removePending(_ id: String) {
+        releaseTransfer(id)
+        savingTransfers.remove(id); trashingTransfers.remove(id); trashFailures.remove(id)
+        pendingTransfers.removeValue(forKey: id)
+        pendingOrder.removeAll { $0 == id }
+        promptedTransfers.remove(id)
+        if requestedSaveID == id { requestedSaveID = nil }
+    }
+    private func releaseTransfer(_ id: String) {
+        if let token = heldTransfers.removeValue(forKey: id) {
+            send(["command": "release_transfer", "id": id, "token": token])
+        }
+    }
+    private func holdTransfer(_ id: String, action: HoldAction, choosing: Bool) {
+        let request = UUID().uuidString.lowercased()
+        holdRequests[request] = (id, action)
+        if choosing { choosingRequest = request }
+        guard send(["command": "hold_transfer", "id": id, "request_id": request]) else {
+            holdRequests.removeValue(forKey: request)
+            if choosingRequest == request { choosingRequest = nil }
+            saveCouldNotStart(id: id)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self, self.holdRequests.removeValue(forKey: request) != nil else { return }
+            self.send(["command": "release_transfer", "id": id, "token": request])
+            if self.choosingRequest == request { self.choosingRequest = nil }
+            self.saveCouldNotStart(id: id)
+            self.showError("AimDrop", L10n.text("The receiver did not respond. Try again.", "Odbiornik nie odpowiedział. Spróbuj ponownie."))
+        }
+    }
+    private func requestTrash(id: String) {
+        guard canHandleTransfer(id) else { return }
+        manuallyHandledTransfers.insert(id)
+        holdTransfer(id, action: .trash, choosing: true)
+    }
+    private func requestTrashAll(ids displayedIDs: [String]? = nil) {
+        let ids = (displayedIDs ?? pendingOrder).filter { canHandleTransfer($0) }
+        guard !ids.isEmpty else { return }
+        manuallyHandledTransfers.formUnion(ids)
+        trashAllOfferIDs = ids
+        presentTrashConfirmation(id: nil)
+    }
+    private func presentTrashConfirmation(id: String?) {
+        guard panel == nil, errorAlert == nil, trashAlert == nil, !updateRestart.active,
+              settingsWindow?.isChoosingFile != true else {
+            if let id { releaseTransfer(id) }
+            else { trashAllOfferIDs.removeAll() }
+            return
+        }
+        pendingMenu.hidePreview()
+        let bulk = id == nil
+        let alert = NSAlert()
+        alert.messageText = bulk ? L10n.text("Delete all unsaved transfers?", "Usunąć wszystkie niezapisane transfery?")
+            : L10n.text("Delete this transfer?", "Usunąć ten transfer?")
+        alert.informativeText = bulk
+            ? L10n.format("Transfers to delete: %ld", "Transfery do usunięcia: %ld", trashAllOfferIDs.count) + "\n\n"
+                + L10n.text("These files will be moved to Trash. Transfers being saved and new arrivals are excluded.", "Te pliki zostaną przeniesione do Kosza. Trwające zapisy i nowe przesyłki zostaną pominięte.")
+            : L10n.text("All files in this transfer will be moved to Trash.", "Wszystkie pliki z tego transferu zostaną przeniesione do Kosza.")
+        let cancel = alert.addButton(withTitle: L10n.text("Cancel", "Anuluj"))
+        cancel.keyEquivalent = "\u{1b}"; cancel.target = self; cancel.action = #selector(cancelTrash)
+        let remove = alert.addButton(withTitle: bulk ? L10n.text("Delete All", "Usuń wszystkie") : L10n.text("Delete", "Usuń"))
+        remove.keyEquivalent = ""; remove.target = self; remove.action = #selector(confirmTrash)
+        trashAlert = alert; trashOfferID = id
+        alert.layout(); WindowPlacement.center(alert.window)
+        NSApp.activate(ignoringOtherApps: true)
+        alert.window.makeKeyAndOrderFront(nil)
+    }
+    @objc private func cancelTrash() { finishTrashConfirmation(delete: false) }
+    @objc private func confirmTrash() { finishTrashConfirmation(delete: true) }
+    private func finishTrashConfirmation(delete: Bool) {
+        let id = trashOfferID
+        let allIDs = trashAllOfferIDs
+        trashAlert?.window.close(); trashAlert = nil; trashOfferID = nil
+        trashAllOfferIDs.removeAll()
+        if let id {
+            if delete, let token = heldTransfers[id] {
+                trashingTransfers.insert(id)
+                if send(["command": "trash", "id": id, "token": token]) {
+                    heldTransfers.removeValue(forKey: id)
+                } else {
+                    trashingTransfers.remove(id)
+                    releaseTransfer(id)
+                }
+            } else { releaseTransfer(id) }
+        } else if delete {
+            let ids = allIDs.filter { canHandleTransfer($0) }
+            for offset in stride(from: 0, to: ids.count, by: 512) {
+                let batch = Array(ids[offset..<min(offset + 512, ids.count)])
+                let request = UUID().uuidString.lowercased()
+                bulkTrashRequests[request] = Set(batch)
+                guard send(["command": "trash_many", "request_id": request, "ids": batch]) else {
+                    bulkTrashRequests.removeValue(forKey: request)
+                    showError("AimDrop", L10n.text("The receiver did not respond. Try again.", "Odbiornik nie odpowiedział. Spróbuj ponownie."))
+                    break
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                    guard let self, !self.quitting, self.bulkTrashRequests.removeValue(forKey: request) != nil else { return }
+                    self.refreshPendingMenu()
+                    self.showError("AimDrop", L10n.text("The receiver did not respond. Try again.", "Odbiornik nie odpowiedział. Spróbuj ponownie."))
+                }
+            }
+        }
+        refreshPendingMenu()
+        presentNextPending()
     }
 
     private func requestSave(id: String) {
-        guard !completedTransfers.contains(id), !savingTransfers.contains(id) else { return }
+        guard !updateRestart.active else { return }
+        guard !completedTransfers.contains(id), !savingTransfers.contains(id), !trashingTransfers.contains(id) else { return }
         manuallyHandledTransfers.insert(id)
         if currentOffer == id, let panel = panel {
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
             return
         }
-        guard pendingTransfers[id] != nil else { requestedSaveID = id; return }
+        guard pendingTransfers[id] != nil else {
+            if inboxLoaded {
+                notifications.cancel(id: id)
+                showError("AimDrop", L10n.text("This transfer is no longer available or is busy.", "Ten transfer jest już niedostępny lub jest w trakcie operacji."))
+            } else { requestedSaveID = id }
+            return
+        }
         requestedSaveID = nil
         promptedTransfers.remove(id)
         pendingOrder.removeAll { $0 == id }
@@ -506,19 +758,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentNextPending() {
-        guard panel == nil, settingsWindow?.isChoosingFile != true, errorAlert == nil, updateAlert == nil else { return }
+        updateRestart.advance()
+        guard panel == nil, trashAlert == nil, choosingRequest == nil, settingsWindow?.isChoosingFile != true, errorAlert == nil else { return }
         if let (title, message) = deferredError {
             deferredError = nil
             showError(title, message)
             return
         }
-        if let result = deferredUpdateResult {
-            deferredUpdateResult = nil
-            showUpdateResult(result)
-            return
-        }
-        guard workerReady,
-              let id = pendingOrder.first(where: { !promptedTransfers.contains($0) && !savingTransfers.contains($0) && pendingTransfers[$0] != nil }),
+        guard !updateRestart.active, workerReady,
+              let id = pendingOrder.first(where: { !promptedTransfers.contains($0) && !savingTransfers.contains($0) && !trashingTransfers.contains($0) && pendingTransfers[$0] != nil }),
               let event = pendingTransfers[id] else { return }
         promptedTransfers.insert(id)
         chooseFolder(event)
@@ -526,7 +774,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func chooseFolder(_ event: [String: Any]) {
         guard let id = event["id"] as? String else { return }
-        guard panel == nil else { return }
+        guard panel == nil, choosingRequest == nil else { return }
+        holdTransfer(id, action: .save, choosing: true)
+    }
+
+    private func presentFolder(_ event: [String: Any]) {
+        guard let id = event["id"] as? String, panel == nil else { return }
         manuallyHandledTransfers.insert(id)
         let picker = NSOpenPanel()
         picker.title = L10n.text("AimDrop — save received files", "AimDrop — zapisz odebrane pliki")
@@ -544,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         currentOffer = id
         panel = picker
-        refreshLatestSaveItem()
+        refreshPendingMenu()
         setReceiverStatus("Choose a folder for received files…", "Wybierz folder dla odebranych plików…")
         NSApp.activate(ignoringOtherApps: true)
         picker.begin { [weak self] response in
@@ -555,19 +808,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             } else {
                 self.pendingOrder.removeAll { $0 == id }
                 self.pendingOrder.append(id)
+                self.releaseTransfer(id)
                 self.send(["command": "defer", "id": id])
                 self.notifications.awaitingDestination(id: id, count: event["count"] as? Int ?? 0)
                 self.setReceiverStatus("Received files are waiting to be saved", "Odebrane pliki czekają na zapis")
             }
             self.panel = nil
             self.currentOffer = nil
-            self.refreshLatestSaveItem()
+            self.refreshPendingMenu()
             DispatchQueue.main.async { self.presentNextPending() }
         }
     }
 
     private func showError(_ title: String, _ message: String) {
-        if panel != nil || settingsWindow?.isChoosingFile == true || updateAlert != nil {
+        if panel != nil || trashAlert != nil || settingsWindow?.isChoosingFile == true {
             deferredError = (title, message)
             return
         }
@@ -589,7 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func closeError() {
         errorAlert?.window.close()
         errorAlert = nil
-        refreshLatestSaveItem()
+        refreshPendingMenu()
         presentNextPending()
     }
 
@@ -600,10 +854,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showSettings() {
+        guard !updateRestart.active else { return }
         if settingsWindow == nil {
             let controller = SettingsWindowController()
             controller.onSave = { [weak self] value in self?.applyPreferences(value) ?? false }
-            controller.canChooseFile = { [weak self] in self?.panel == nil && self?.errorAlert == nil && self?.updateAlert == nil }
+            controller.canChooseFile = { [weak self] in self?.panel == nil && self?.trashAlert == nil && self?.choosingRequest == nil && self?.errorAlert == nil && self?.updateRestart.active == false }
             controller.onPickerClosed = { [weak self] in
                 DispatchQueue.main.async { [weak self] in self?.presentNextPending() }
             }
@@ -620,6 +875,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @discardableResult private func applyPreferences(_ value: AppPreferences) -> Bool {
         do {
+            let retentionChanged = preferences.retentionDays != value.retentionDays || preferences.automaticTrash != value.automaticTrash
             let avatar = try selectedAvatar(value)
             _ = try materializeAvatar(value, avatar: avatar)
             preferences = try preferenceStore.save(value)
@@ -627,8 +883,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             L10n.configure(preferences.language)
             refreshLanguage()
             synchronizeReceiverProfile()
+            refreshPendingMenu()
+            if retentionChanged { synchronizeRetention() }
             return true
         } catch { setSettingsStatus(error.localizedDescription, error: true); return false }
+    }
+
+    private func synchronizeRetention() {
+        guard workerReady else { return }
+        let request = UUID().uuidString.lowercased()
+        retentionRequestID = request
+        if !send(["command": "set_retention", "request_id": request,
+                  "days": preferences.retentionDays, "enabled": preferences.automaticTrash]) {
+            retentionRequestID = nil
+            setSettingsStatus(L10n.text("Could not update inbox settings.", "Nie udało się zmienić ustawień bufora."), error: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self, self.retentionRequestID == request else { return }
+            self.retentionRequestID = nil
+            self.setSettingsStatus(L10n.text("Could not update inbox settings.", "Nie udało się zmienić ustawień bufora."), error: true)
+        }
+    }
+
+    private func synchronizeLanguage() {
+        let request = UUID().uuidString.lowercased()
+        languageRequestID = request
+        if !send(["command": "set_language", "language": L10n.languageCode, "request_id": request]) {
+            languageRequestID = nil
+            setSettingsStatus(L10n.text("The receiver did not respond. Try again.", "Odbiornik nie odpowiedział. Spróbuj ponownie."), error: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self, self.languageRequestID == request else { return }
+            self.languageRequestID = nil
+            self.setSettingsStatus(L10n.text("The receiver did not respond. Try again.", "Odbiornik nie odpowiedział. Spróbuj ponownie."), error: true)
+        }
     }
 
     private func selectedAvatar(_ value: AppPreferences) throws -> ReceiverAvatar {
@@ -657,17 +945,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard send(["command": "set_profile", "request_id": request, "name": receiverName,
                         "avatar_path": path as Any? ?? NSNull(), "avatar_digest": avatar.digest]) else {
                 pendingProfileRequest = nil
-                setSettingsStatus(L10n.text("Saved locally. The receiver connection is unavailable.", "Zapisano lokalnie. Połączenie z odbiornikiem jest niedostępne.")); return
+                setSettingsStatus(L10n.text("Saved locally. The receiver connection is unavailable.", "Zapisano lokalnie. Połączenie z odbiornikiem jest niedostępne."), error: true); return
             }
             setSettingsStatus(L10n.text("Saved. Updating the receiver…", "Zapisano. Trwa aktualizowanie odbiornika…"))
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
                 guard let self, self.pendingProfileRequest?.id == request else { return }
-                self.setSettingsStatus(L10n.text("Saved locally. The receiver has not confirmed the settings yet.", "Zapisano lokalnie. Odbiornik jeszcze nie potwierdził ustawień."))
+                self.pendingProfileRequest = nil
+                self.setSettingsStatus(L10n.text("Saved locally. The receiver has not confirmed the settings yet.", "Zapisano lokalnie. Odbiornik jeszcze nie potwierdził ustawień."), error: true)
             }
         } catch { setSettingsStatus(error.localizedDescription, error: true) }
     }
 
     private func setSettingsStatus(_ text: String, error: Bool = false) {
+        if error && updateRestart.active { updateSettingsFailed = true }
         settingsStatus = text
         settingsWindow?.setSavedStatus(text, error: error)
     }
@@ -681,6 +971,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func saveAutomatically(id: String, destination: SaveDestination) {
         promptedTransfers.insert(id)
         savingTransfers.insert(id)
+        holdTransfer(id, action: .automatic(destination), choosing: false)
+    }
+
+    private func beginAutomaticSave(id: String, destination: SaveDestination) {
         setReceiverStatus("Preparing automatic save…", "Przygotowywanie automatycznego zapisu…")
         destinationQueue.async { [weak self] in
             let result = Result { try destination.resolve() }
@@ -693,7 +987,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     self.startSave(id: id, directory: resolved.url.path)
                 case .failure:
                     self.saveCouldNotStart(id: id)
-                    self.showError(L10n.text("Save folder unavailable", "Folder zapisu jest niedostępny"), L10n.text("Your files are waiting in the inbox. Connect the drive or choose another folder from the received-files notification.", "Odebrane pliki czekają na zapis. Podłącz dysk lub wybierz inny folder przez powiadomienie o odebranych plikach."))
+                    self.showError(L10n.text("Save folder unavailable", "Folder zapisu jest niedostępny"), L10n.text("Your files are waiting in the inbox. Connect the drive or choose another folder from Unsaved transfers.", "Odebrane pliki czekają na zapis. Podłącz dysk lub wybierz inny folder z menu Niezapisane transfery."))
                 }
             }
         }
@@ -703,8 +997,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard pendingTransfers[id] != nil, !completedTransfers.contains(id) else { return }
         promptedTransfers.insert(id)
         savingTransfers.insert(id)
-        refreshLatestSaveItem()
-        if !send(["command": "save", "id": id, "directory": directory]) { saveCouldNotStart(id: id) }
+        refreshPendingMenu()
+        var command: [String: Any] = ["command": "save", "id": id, "directory": directory]
+        if let token = heldTransfers[id] { command["token"] = token }
+        if send(command) { heldTransfers.removeValue(forKey: id) }
+        else { saveCouldNotStart(id: id) }
     }
 
     private func refreshSavedDestination(from old: SaveDestination, to updated: SaveDestination) {
@@ -718,13 +1015,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func saveCouldNotStart(id: String) {
+        releaseTransfer(id)
         savingTransfers.remove(id)
         progressBanners.remove(id: id)
         if let transfer = pendingTransfers[id] {
             notifications.awaitingDestination(id: id, count: transfer["count"] as? Int ?? 0)
         }
         setReceiverStatus("Files are waiting to be saved", "Pliki czekają na zapis")
-        refreshLatestSaveItem()
+        refreshPendingMenu()
     }
 
     @objc private func showAbout() {
@@ -750,92 +1048,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func checkForUpdates() {
-        guard !checkingForUpdates, deferredUpdateResult == nil else { return }
-        if let alert = updateAlert {
-            WindowPlacement.center(alert.window)
-            NSApp.activate(ignoringOtherApps: true)
-            alert.window.makeKeyAndOrderFront(nil)
-            return
-        }
-        checkingForUpdates = true
-        updatePresentationScreen = WindowPlacement.activeScreen()
-        updateItem.title = L10n.text("Checking…", "Sprawdzanie…")
-        updater.checkManually { [weak self] result in
-            guard let self, !self.quitting else { return }
-            self.checkingForUpdates = false
-            self.updateItem.title = L10n.text("Check for Updates…", "Sprawdź aktualizacje…")
-            self.showUpdateResult(result)
-        }
+        sparkleUpdater.checkManually()
     }
 
-    private func showUpdateResult(_ result: Result<UpdateCheckResult, Error>) {
-        guard panel == nil, settingsWindow?.isChoosingFile != true, errorAlert == nil, updateAlert == nil else {
-            deferredUpdateResult = result
-            return
+    private func configureUpdates() {
+        sparkleUpdater.log = { [weak self] in self?.log($0) }
+        sparkleUpdater.onManualCheck = { [weak self] in self?.updater.manualCheckStarted() }
+        sparkleUpdater.onPresented = { [weak self] in self?.updater.markNotified($0) }
+        sparkleUpdater.canCancelPreparation = { [weak self] in self?.updateRestart.canCancel ?? true }
+        sparkleUpdater.prepareRestart = { [weak self] completion in
+            guard let self, self.workerReady else { completion(false); return }
+            self.settingsResolvedForUpdate = false; self.resolvingUpdateSettings = false; self.updateSettingsFailed = false
+            self.updateRestart.begin(completion)
+            // An unconfirmed delete is not an already-started Trash operation.
+            // Close admission first: dismissing the alert normally presents
+            // the next pending picker, which must not start during preparation.
+            if self.updateRestart.active, self.trashAlert != nil { self.finishTrashConfirmation(delete: false) }
         }
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        updateDownloadURL = nil
-        switch result {
-        case .success(.available(let update)):
-            alert.messageText = L10n.format("AimDrop %@ is available", "Dostępna jest wersja AimDrop %@", update.version)
-            alert.informativeText = L10n.text("Download the new version from GitHub.", "Pobierz nową wersję z GitHuba.")
-            let download = alert.addButton(withTitle: L10n.text("Download", "Pobierz"))
-            download.target = self
-            download.action = #selector(downloadUpdate)
-            updateDownloadURL = update.downloadURL
-            updater.markNotified(update)
-        case .success(.upToDate):
-            alert.messageText = L10n.text("You're up to date.", "Masz aktualną wersję.")
-            alert.informativeText = L10n.format("You're using AimDrop %@.", "Używasz AimDrop %@.", Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.8.0")
-        case .success(.noReleases):
-            alert.messageText = L10n.text("No releases yet", "Brak opublikowanych wydań")
-            alert.informativeText = L10n.text("The first release hasn't been published on GitHub yet.", "Pierwsza wersja nie została jeszcze opublikowana na GitHubie.")
-        case .failure(let error):
-            log("Update check failed: \(error)")
-            alert.alertStyle = .warning
-            alert.messageText = L10n.text("Could not check for updates", "Nie można sprawdzić aktualizacji")
-            if let failure = error as? UpdateCheckError, case .httpStatus(let code) = failure, code == 403 || code == 429 {
-                alert.informativeText = L10n.text("GitHub is temporarily limiting requests. Try again later.", "GitHub tymczasowo ogranicza liczbę żądań. Spróbuj ponownie później.")
-            } else {
-                alert.informativeText = L10n.text("Check your internet connection and try again later.", "Sprawdź połączenie z internetem i spróbuj ponownie później.")
+        sparkleUpdater.cancelPreparation = { [weak self] in
+            guard let self else { return }
+            let restartWorker = self.updateRestart.phase == .ready
+            self.updateRestart.resetAfterInstallerFailure()
+            self.settingsWindow?.cancelUpdatePreparation()
+            self.resolvingUpdateSettings = false; self.settingsResolvedForUpdate = false
+            if restartWorker {
+                self.inboxLoaded = false
+                do { try self.startWorker() } catch { self.showError("AimDrop", error.localizedDescription) }
+            }
+            self.presentNextPending()
+        }
+        updateRestart.send = { [weak self] in self?.send($0) ?? false }
+        updateRestart.uiReady = { [weak self] in self?.updateUIReady() ?? false }
+        updateRestart.onChange = { [weak self] in
+            guard let self else { return }
+            self.refreshPendingMenu()
+            if self.updateRestart.phase == .stopping {
+                self.sparkleUpdater.showWorking(L10n.text("Restarting AimDrop…", "Ponowne uruchamianie AimDrop…"), cancellable: false)
+            } else if self.updateRestart.phase == .waiting {
+                self.sparkleUpdater.showWorking(L10n.text("Waiting for current operations…", "Oczekiwanie na zakończenie bieżących operacji…"))
             }
         }
-        let close = alert.addButton(withTitle: updateDownloadURL == nil ? "OK" : L10n.text("Later", "Później"))
-        close.keyEquivalent = "\u{1b}"
-        close.target = self
-        close.action = #selector(closeUpdateAlert)
-        updateAlert = alert
-        alert.layout()
-        WindowPlacement.center(alert.window, on: updatePresentationScreen)
-        NSApp.activate(ignoringOtherApps: true)
-        alert.window.makeKeyAndOrderFront(nil)
+        updateRestart.onFailure = { [weak self] in
+            self?.showError("AimDrop", L10n.text("The receiver did not confirm a safe shutdown. The update was canceled.", "Odbiornik nie potwierdził bezpiecznego zakończenia pracy. Aktualizacja została anulowana."))
+        }
     }
 
-    @objc private func downloadUpdate() {
-        if let url = updateDownloadURL { NSWorkspace.shared.open(url) }
-        closeUpdateAlert()
+    private func updateUIReady() -> Bool {
+        if updateSettingsFailed {
+            DispatchQueue.main.async { [weak self] in self?.sparkleUpdater.cancel() }
+            return false
+        }
+        guard panel == nil, trashAlert == nil, choosingRequest == nil, holdRequests.isEmpty,
+              savingTransfers.isEmpty, trashingTransfers.isEmpty, bulkTrashRequests.isEmpty,
+              settingsWindow?.isChoosingFile != true, errorAlert == nil, deferredError == nil else { return false }
+        guard settingsResolvedForUpdate else {
+            if !resolvingUpdateSettings {
+                resolvingUpdateSettings = true
+                let request = updateRestart.requestID
+                if let settingsWindow {
+                    settingsWindow.resolveForUpdate { [weak self] accepted in
+                        guard let self, self.updateRestart.requestID == request, self.updateRestart.active else { return }
+                        self.resolvingUpdateSettings = false
+                        self.settingsResolvedForUpdate = accepted
+                        if accepted { DispatchQueue.main.async { self.updateRestart.advance() } }
+                        else { self.sparkleUpdater.cancel() }
+                    }
+                } else {
+                    settingsResolvedForUpdate = true; resolvingUpdateSettings = false
+                    DispatchQueue.main.async { [weak self] in self?.updateRestart.advance() }
+                }
+            }
+            return false
+        }
+        return pendingProfileRequest == nil && retentionRequestID == nil && languageRequestID == nil
     }
 
-    @objc private func closeUpdateAlert() {
-        updateAlert?.window.close()
-        updateAlert = nil
-        updateDownloadURL = nil
-        updatePresentationScreen = nil
-        refreshLatestSaveItem()
-        presentNextPending()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Every quit path must pass this gate, including Sparkle's resumed
+        // install path, which does not always call the postpone-relaunch hook.
+        if updateRestart.active { return updateRestart.phase == .ready && sparkleUpdater.committed ? .terminateNow : .terminateCancel }
+        if sparkleUpdater.installing { sparkleUpdater.showUpdateInFocus(); return .terminateCancel }
+        return .terminateNow
     }
 
     @objc private func quitApp() { NSApp.terminate(nil) }
+
+    #if AIMDROP_UPDATE_EXPERIMENT
+    private var experimentTimer: Timer?
+    private func startUpdateExperiment() {
+        guard let config = Bundle.main.object(forInfoDictionaryKey: "AimDropUpdateExperiment") as? [String: String] else { return }
+        log("Update experiment build=\(config["build"] ?? "?") login=\(LoginItemManager.system.status().rawValue) path=\(Bundle.main.bundlePath)")
+        if config["install"] == "yes" {
+            sparkleUpdater.onPresented = { [weak self] _ in
+                DispatchQueue.main.async { self?.sparkleUpdater.installForExperiment() }
+            }
+        }
+        experimentTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self, self.workerReady else { return }
+            if config["install"] == "yes", FileManager.default.fileExists(atPath: self.supportDirectory.appendingPathComponent("install").path) {
+                self.experimentTimer?.invalidate()
+                self.sparkleUpdater.checkManually()
+            } else if config["install"] != "yes", FileManager.default.fileExists(atPath: self.supportDirectory.appendingPathComponent("cleanup").path) {
+                self.experimentTimer?.invalidate()
+                try? LoginItemManager.system.setEnabled(false)
+                NSApp.terminate(nil)
+            }
+        }
+    }
+    #endif
 
     func applicationWillTerminate(_ notification: Notification) {
         quitting = true
         updater.stop()
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        updateAlert?.window.close()
+        trashAlert?.window.close()
         pairingWindow.close()
         progressBanners.closeAll()
+        pendingMenu.hidePreview()
         send(["command": "shutdown"])
         try? input?.close()
         outputPipe?.fileHandleForReading.readabilityHandler = nil
@@ -845,17 +1175,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     #if AIRFOLDER_CHECKS
     // Exercise the actual event routing without a network worker or user dialogs.
-    func prepareForChecks(defaults: UserDefaults, preferences: AppPreferences, storageDirectory: URL? = nil, reservePicker: Bool = true, command: @escaping ([String: Any]) -> Bool) {
+    func prepareForChecks(defaults: UserDefaults, preferences: AppPreferences, storageDirectory: URL? = nil, reservePicker: Bool = true, automaticHolds: Bool = true, command: @escaping ([String: Any]) -> Bool) {
         preferenceStore = PreferencesStore(defaults: defaults)
         self.preferences = preferences
         L10n.configure(preferences.language)
         activeLanguageCode = L10n.languageCode
         appliedReceiverName = preferences.receiverName
-        updater = UpdateChecker(currentVersion: "0.8.0", defaults: defaults)
+        updater = UpdateChecker(defaults: defaults)
         appliedAvatarDigest = try? selectedAvatar(preferences).digest
         storageForChecks = storageDirectory
         workerReady = true
         commandForChecks = command
+        automaticHoldsForChecks = automaticHolds
         setupMenu()
         if reservePicker { panel = NSOpenPanel() }  // Reserve without displaying.
     }
@@ -866,25 +1197,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var savingIDsForChecks: Set<String> { savingTransfers }
     var appliedNameForChecks: String? { appliedReceiverName }
     var appliedAvatarForChecks: String? { appliedAvatarDigest }
-    var latestSaveIDForChecks: String? { latestSavableID }
-    var latestSaveItemForChecks: NSMenuItem { saveLatestItem }
+    var pendingMenuForChecks: NSMenuItem { pendingMenu.rebuild(); return pendingMenu.item }
+    func requestTrashForChecks(id: String) { requestTrash(id: id) }
+    func requestTrashAllForChecks() { requestTrashAll() }
+    var trashAlertForChecks: NSAlert? { trashAlert }
+    func finishTrashForChecks(delete: Bool) { finishTrashConfirmation(delete: delete) }
     var currentFolderIDForChecks: String? { currentOffer }
     func cancelFolderForChecks() { panel?.cancel(nil) }
     func showSettingsForChecks() -> SettingsWindowController { showSettings(); return settingsWindow! }
-    func updateResultForChecks(_ result: Result<UpdateCheckResult, Error>, on screen: NSScreen? = nil) {
-        updatePresentationScreen = screen
-        showUpdateResult(result)
-    }
-    var updateAlertForChecks: NSAlert? { updateAlert }
+    func prepareUpdateForChecks(_ completion: @escaping (Bool) -> Void) { configureUpdates(); sparkleUpdater.prepareRestart?(completion) }
+    func updateWorkerExitedForChecks() { updateRestart.workerExited(success: true) }
     var updateItemForChecks: NSMenuItem { updateItem }
-    func dismissUpdateForChecks() { closeUpdateAlert() }
     func showAboutForChecks() -> NSWindow? { showAbout(); return aboutWindow }
     func closeForChecks() {
+        sparkleUpdater.cancelPreparation = nil
+        sparkleUpdater.dismissUpdateInstallation()
+        pendingMenu.hidePreview()
         progressBanners.closeAll()
         settingsWindow?.close()
-        updateAlert?.window.close()
+        settingsWindow?.cancelUpdatePreparation()
+        trashAlert?.window.close()
         aboutWindow?.close()
-        panel = nil
+        panel?.cancel(nil); panel = nil
         NSStatusBar.system.removeStatusItem(statusItem)
     }
     #endif

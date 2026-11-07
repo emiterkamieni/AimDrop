@@ -19,6 +19,8 @@ class NativeReceiver:
         self.ready = threading.Event()
         self.ready_fields = None
         self.pending = {}
+        self.quiesce_request = None
+        self.quiesced = False
         arguments = [
             str(executable), "--name=" + name, "--backend-port=" + str(port),
             "--state-dir=" + str(state_dir.resolve()), "--artwork=" + str(artwork.resolve()),
@@ -62,6 +64,10 @@ class NativeReceiver:
                     code = value.get("code")
                     if isinstance(code, str) and len(code) == 6 and code.isascii() and code.isdigit():
                         self.emit("pairing_pin", code=code)
+                elif event == "quiesced":
+                    with self.lock:
+                        if value.get("request_id") == self.quiesce_request:
+                            self.quiesced = True
                 elif event == "pin_closed":
                     self.emit("pairing_closed")
                 elif event == "error":
@@ -120,7 +126,30 @@ class NativeReceiver:
             with self.lock:
                 self.pending.pop(request, None)
 
-    def close(self):
+    def quiesce(self, request):
+        with self.lock:
+            if self.quiesce_request == request:
+                return self.quiesced
+            self.quiesce_request, self.quiesced = request, False
+        self._send(dict(command="quiesce", request_id=request))
+        return False
+
+    def resume(self):
+        with self.lock:
+            self.quiesce_request, self.quiesced = None, False
+        self._send(dict(command="resume"))
+
+    def close(self, graceful=False):
+        if graceful:
+            self._send(dict(command="shutdown"))
+            self.closing = True
+            # The helper exits only after its dispatch queue has stopped. EOF
+            # is intentionally deferred: its crash fallback exits immediately.
+            self.process.wait()
+            self.process.stdin.close()
+            self.reader.join()
+            self.process.stdout.close()
+            return
         self.closing = True
         # EOF also stops the helper if it is still awaiting startup. Each child
         # has its own pipe, so killing the worker cannot leave it advertising.

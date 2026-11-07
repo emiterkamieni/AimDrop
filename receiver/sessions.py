@@ -62,6 +62,7 @@ class Sessions:
         self.lock = threading.RLock()
         self.current = None
         self.paused = False
+        self.draining = False
         self.stopped = False
         self.recent = {}
         self.prepare_destination = prepare_destination
@@ -92,6 +93,8 @@ class Sessions:
                         and existing.selection == selected and existing.state in ("waiting", "accepted")):
                     return existing
                 raise Refused(message("Another transfer is already being handled.", "Inna przesyłka jest już obsługiwana."))
+            if self.draining:
+                raise Refused(message("Receiving is paused.", "Odbieranie jest wstrzymane."))
             offer = Offer(ident, key, display_text(request.get("SenderComputerName", "iPhone")), names,
                           selection=selected,
                           folders=tuple(display_text(item.name) for item in selected if item.is_directory))
@@ -216,6 +219,16 @@ class Sessions:
             if paused and self.current and self.current.state != "receiving":
                 self._close(self.current, "paused")
         self.emit("paused", paused=paused)
+
+    def drain(self, enabled):
+        # Existing offers (including accepted, not-yet-uploading ones) retain
+        # their consent and normal timeout. This is deliberately not pause().
+        with self.lock:
+            self.draining = enabled
+
+    def is_busy(self):
+        with self.lock:
+            return self.current is not None
 
     def close(self):
         with self.lock:

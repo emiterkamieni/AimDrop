@@ -44,8 +44,10 @@ class InboxTests(unittest.TestCase):
         self.inbox.prepare(incomplete)
         restored = Inbox(self.inbox.root)
         self.assertEqual(restored.list_ready(), [info])
-        self.assertEqual(info, dict(id=self.ident, count=1, files=["photo.jpg"],
-                                   paths=[str(payload / "photo.jpg")]))
+        self.assertEqual({key: info[key] for key in ("id", "count", "files", "paths")},
+                         dict(id=self.ident, count=1, files=["photo.jpg"], paths=[str(payload / "photo.jpg")]))
+        self.assertEqual(info["retention_days"], 7)
+        self.assertEqual(info["expires_at_ns"] - info["received_at_ns"], 7 * 86400 * 1_000_000_000)
         result = restored.save(self.ident, str(self.destination))
         self.assertEqual(result["paths"], [str(self.destination / "photo.jpg")])
         self.assertEqual((self.destination / "photo.jpg").read_bytes(), b"photo bytes")

@@ -85,9 +85,9 @@ struct SettingsChecks {
         let failed = UUID().uuidString
         acceptsCommands = false
         app.eventForChecks(downloaded(failed))
-        wait { saves(failed).count == 1 && !app.savingIDsForChecks.contains(failed) }
+        wait { !app.savingIDsForChecks.contains(failed) }
         app.eventForChecks(downloaded(failed))
-        precondition(saves(failed).count == 1 && app.pendingIDsForChecks.contains(failed), "Closed command channel must release reservation and retain pending files")
+        precondition(saves(failed).isEmpty && app.pendingIDsForChecks.contains(failed), "Closed command channel must release reservation and retain pending files")
         acceptsCommands = true
 
         // A removed destination must not silently fall back to a cached path or be recreated.
@@ -171,8 +171,8 @@ struct SettingsChecks {
             try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
         }
         let buttons = descendants(view).compactMap { $0 as? NSButton }
-        let resetAvatar = buttons.first { $0.title == "Przywróć logo" }!
-        let chooseAvatar = buttons.first { $0.title == "Wybierz zdjęcie…" }!
+        let resetAvatar = buttons.first { $0.title == "Przywróć domyślny" }!
+        let chooseAvatar = buttons.first { $0.title == "Zmień awatar" }!
         let saveSettings = buttons.first { $0.title == "Zapisz" }!
         var saved: [AppPreferences] = []
         controller.onSave = { saved.append($0); return true }
