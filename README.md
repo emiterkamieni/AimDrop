@@ -32,7 +32,7 @@ configurable inbox cleanup. See [what changed](docs/releases/0.8.4.md).
 - **15 languages**, selected automatically from your system preferences or manually in Settings.
 - **In-app updates** through Sparkle, with signed downloads, safe restart, 24-hour checks and optional new-version notifications.
 
-<img src="docs/images/settings.png" width="560" alt="AimDrop settings with a circular avatar, save options, language and notification preferences">
+<img src="docs/images/settings.png" width="560" alt="AimDrop settings with avatar controls, save options, automatic inbox cleanup, language and launch-at-login preferences">
 
 ## Requirements
 
