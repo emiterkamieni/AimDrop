@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let pendingMenu = PendingTransfersMenu()
     private let updateItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var statusText: () -> String = { L10n.text("Starting…", "Uruchamianie…") }
+    private var statusIsReady = false
+    private var discoveryStatus: String?
     private var activeLanguageCode = ""
     private lazy var sparkleUpdater = SparkleUpdateController()
     private lazy var updater = UpdateChecker(canProbe: { [weak self] in self?.sparkleUpdater.busy == false },
@@ -166,11 +168,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func setReceiverStatus(_ english: String, _ polish: String, _ arguments: CVarArg...) {
+        statusIsReady = english == "Ready to receive"
         statusText = {
             let value = L10n.text(english, polish)
             return arguments.isEmpty ? value : String(format: value, locale: L10n.locale, arguments: arguments)
         }
-        statusLine.title = statusText()
+        refreshStatusLine()
+    }
+
+    private func refreshStatusLine() {
+        let availability: String?
+        switch discoveryStatus {
+        case "waiting": availability = L10n.text("Waiting for Wi-Fi…", "Oczekiwanie na Wi-Fi…")
+        case "retrying": availability = L10n.text("Restoring receiver visibility…", "Przywracanie widoczności odbiornika…")
+        default: availability = nil
+        }
+        if workerReady, let availability {
+            statusLine.title = statusIsReady ? availability : statusText() + " · " + availability
+        } else { statusLine.title = statusText() }
     }
 
     private func refreshLanguage() {
@@ -191,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         statusItem.button?.toolTip = L10n.text("AimDrop — receive AirDrop into a folder you choose", "AimDrop — odbierz AirDrop do wybranego folderu")
         let menu = NSMenu()
         refreshReceiverName()
-        statusLine.title = statusText()
+        refreshStatusLine()
         menu.addItem(nameLine)
         menu.addItem(statusLine)
         menu.addItem(.separator())
@@ -247,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func startWorker() throws {
+        discoveryStatus = nil
         guard let resources = Bundle.main.resourceURL else {
             throw NSError(domain: "AimDrop", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.text("Application resources are missing.", "Brak zasobów aplikacji.")])
         }
@@ -389,6 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if let code = event["code"] as? String { pairingWindow.show(code: code) }
         case "pairing_closed":
             pairingWindow.close()
+        case "discovery_status":
+            guard let status = event["status"] as? String,
+                  ["advertising", "waiting", "retrying"].contains(status) else { return }
+            discoveryStatus = status
+            refreshStatusLine()
         case "ready":
             workerReady = true
             #if AIMDROP_UPDATE_EXPERIMENT
@@ -522,8 +543,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             setReceiverStatus("Starting transfer…", "Rozpoczynanie odbioru…")
         case "progress":
             let progress = TransferProgress(event: event)
+            statusIsReady = false
             statusText = { progress.text.replacingOccurrences(of: "\n", with: " · ") }
-            statusLine.title = statusText()
+            refreshStatusLine()
             if let id = event["id"] as? String { progressBanners.update(id: id, progress: progress) }
         case "saving":
             setReceiverStatus("Saving received files…", "Zapisywanie odebranych plików…")
@@ -533,8 +555,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
         case "save_progress":
             let progress = TransferProgress(event: event)
+            statusIsReady = false
             statusText = { progress.text.replacingOccurrences(of: "\n", with: " · ") }
-            statusLine.title = statusText()
+            refreshStatusLine()
             if let id = event["id"] as? String { progressBanners.update(id: id, progress: progress) }
         case "complete":
             guard let id = event["id"] as? String, completedTransfers.insert(id).inserted else { return }
@@ -1198,6 +1221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var appliedNameForChecks: String? { appliedReceiverName }
     var appliedAvatarForChecks: String? { appliedAvatarDigest }
     var pendingMenuForChecks: NSMenuItem { pendingMenu.rebuild(); return pendingMenu.item }
+    var statusForChecks: String { statusLine.title }
     func requestTrashForChecks(id: String) { requestTrash(id: id) }
     func requestTrashAllForChecks() { requestTrashAll() }
     var trashAlertForChecks: NSAlert? { trashAlert }

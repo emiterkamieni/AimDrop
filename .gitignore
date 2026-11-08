@@ -1,5 +1,10 @@
+# AimDrop build, research and release outputs
 dist/
 .build/
+
+# Python-generated caches
 __pycache__/
 *.pyc
+
+# Finder metadata
 .DS_Store

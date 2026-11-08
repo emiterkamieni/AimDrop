@@ -19,3 +19,5 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s tests -v
+      - name: AWDL announcement lifecycle checks
+        run: python3 -B scripts/check-awdl-advertisement.py

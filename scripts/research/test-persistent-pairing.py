@@ -23,10 +23,10 @@ BINARY = str(ROOT / '.build/airfolder-pairing-prototype')
 
 
 class Server:
-    def __init__(self, env):
+    def __init__(self, env, args=('--loopback',)):
         self.buffer = b''
         self.lines = []
-        self.process = subprocess.Popen([BINARY, '--loopback'], cwd=ROOT, env=env,
+        self.process = subprocess.Popen([BINARY, *args], cwd=ROOT, env=env,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.ports = {}
         try:

@@ -20,6 +20,7 @@ subprocess.run([
     "-target", "arm64-apple-macos14.0", "-I", str(ROOT / ".build/research-modules"),
     "-module-cache-path", str(ROOT / ".build/research-module-cache"),
     "-import-objc-header", str(SOURCE / "pake-bridge.h"), str(ROOT / "NativeReceiver/helper.swift"),
+    str(ROOT / "NativeReceiver/MDNSAnnouncement.swift"), str(ROOT / "NativeReceiver/AWDLAdvertisement.swift"),
     str(ROOT / "Sources/ReceiverAvatar.swift"),
     str(ROOT / "Sources/Localization.swift"),
     *[str(SOURCE / (name + ".swift")) for name in

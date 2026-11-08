@@ -7,19 +7,22 @@
 **Receive AirDrop files on your Mac. Choose where they go.**
 
 AimDrop lives in the macOS menu bar and appears as a receiver in AirDrop on your
-Apple devices, including iPhone, iPad and Mac. Files arrive in a persistent inbox before you
-choose a destination, so dismissing the folder picker never discards a transfer.
+other Apple devices, including iPhone, iPad and Mac. Files arrive in a persistent
+inbox before you choose a destination, so dismissing the folder picker never
+discards a transfer.
 
 **[Download for Apple Silicon](https://github.com/emiterkamieni/AimDrop/releases/latest)**
  · [Releases](https://github.com/emiterkamieni/AimDrop/releases)
  · [Report an issue](https://github.com/emiterkamieni/AimDrop/issues)
 
-**Latest release: [0.8.4](https://github.com/emiterkamieni/AimDrop/releases/tag/v0.8.4)**
-— signed in-app updates, a durable unsaved-transfer menu, hover previews and
-configurable inbox cleanup. See [what changed](docs/releases/0.8.4.md).
+**Latest release: [0.8.5](https://github.com/emiterkamieni/AimDrop/releases/tag/v0.8.5) (build 25)**
+— automatic hiding from the receiver Mac's own AirDrop, remote discovery over
+AWDL and automatic visibility recovery. See [what changed](docs/releases/0.8.5.md).
 
 ## Features
 
+- **Visible to your other devices.** AimDrop automatically stays out of its own Mac's system AirDrop.
+- **Automatic discovery recovery** after Wi-Fi/AWDL interruptions, address changes or wake, with access to your inbox while visibility is being restored.
 - **Choose a folder after receiving**, or automatically save new transfers to a selected folder.
 - **A durable inbox.** Unsaved files survive closing the picker and restarting the app.
 - **Live progress:** a blue progress bar, received bytes, file counts, and cancellation.
@@ -42,6 +45,8 @@ configurable inbox cleanup. See [what changed](docs/releases/0.8.4.md).
 
 Device interoperability has been verified with an iPhone running **iOS 26.6.1**
 and a receiving Mac running **macOS 26.5.2**.
+See the [0.8.5 validation status](docs/releases/0.8.5.md#validation-status) for the
+scope of device testing of the new discovery implementation.
 
 Release ZIPs include their own Python runtime. Python, Homebrew and developer
 tools are needed only when building from source.
@@ -93,6 +98,18 @@ Changing the receiver name or avatar requires a new PIN. After pairing,
 **close and reopen AirDrop on the sending device** to refresh the displayed name and image.
 Ordinary application restarts preserve pairing.
 
+### Receiver visibility
+
+AimDrop advertises to nearby devices over Apple's AWDL Wi-Fi link. It automatically
+stays out of the system AirDrop picker on the Mac running AimDrop; no setting is needed.
+
+If AWDL is unavailable, the menu shows **Waiting for Wi-Fi…**. AimDrop automatically
+rebuilds discovery after AWDL disappears, its address changes, an advertisement
+cannot be sent, or the Mac wakes. **Restoring receiver visibility…** indicates that
+recovery is in progress. Already-received files remain accessible through
+**Unsaved transfers**, including saving and moving them to Trash, while discovery
+is unavailable.
+
 ## Languages
 
 AimDrop supports English, Polish, German, French, Spanish, Italian, Portuguese,
@@ -105,14 +122,18 @@ Receiver names and file names are preserved exactly as entered or received.
 
 ## Update AimDrop
 
-**Already using the in-app updater (including the local 0.8.3 build)?**
+**Already using 0.8.4 or another build with the in-app updater (including the local 0.8.3 build)?**
 Open the menu-bar icon → **Check for Updates…** → **Update and Restart**.
 AimDrop downloads and installs the newer release and then reopens itself.
 
 **Upgrading from the public 0.8.2 release or earlier?** Download and install
-**0.8.4** once using the [installation steps](#install). This is the first public
-release with the built-in installer; subsequent releases can be installed from
-the app. Existing settings, inbox files and pairing are preserved.
+the latest release once using the [installation steps](#install). **0.8.4 was the
+first public release with the built-in installer**; subsequent releases can be
+installed from the app.
+
+Upgrading to **0.8.5 (build 25)** preserves stored pairing, receiver name, avatar,
+settings and inbox files. The upgrade alone does not require a new PIN; changing
+the receiver name or avatar still does.
 
 AimDrop checks the latest stable release in this repository every 24 hours,
 including across application restarts. Select **Check for Updates…** in the menu
@@ -165,11 +186,11 @@ To prepare a release that can also be installed through AimDrop, sign the final
 ZIP and update feed using the release publisher's Keychain key:
 
 ```sh
-python3 -B scripts/prepare-update.py --version 0.8.4 --notes docs/releases/0.8.4.md
+python3 -B scripts/prepare-update.py --version 0.8.5 --notes docs/releases/0.8.5.md
 ```
 
 Upload **all three** outputs from `dist` to the same GitHub release:
-`AimDrop-0.8.4-macos-arm64.zip`, `appcast.xml`, and `SHA256SUMS`. Publish them
+`AimDrop-0.8.5-macos-arm64.zip`, `appcast.xml`, and `SHA256SUMS`. Publish them
 together and mark the release as **Latest**, so the stable update-feed URL points
 to it. Both the version and build number must increase for future releases.
 Use `--archive-only` when preparing a newer release while the current

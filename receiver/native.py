@@ -70,6 +70,10 @@ class NativeReceiver:
                             self.quiesced = True
                 elif event == "pin_closed":
                     self.emit("pairing_closed")
+                elif event == "discovery_status":
+                    status = value.get("status")
+                    if status in ("advertising", "waiting", "retrying"):
+                        self.emit("discovery_status", status=status)
                 elif event == "error":
                     break
         except (OSError, ValueError, TypeError, AttributeError):

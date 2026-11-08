@@ -132,13 +132,15 @@ final class PairingState: @unchecked Sendable {
 
 #if !AIRFOLDER_HELPER
 @MainActor enum PINPanel {
+    static var receiverName = "AimDrop Logo Test"
+    static var windowTitle = "AimDrop — test ikony"
     static var panel: NSPanel?
     static var heading: NSTextField?
     static var detail: NSTextField?
     static func show(pin: String? = nil) {
         if panel == nil {
             let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 190), styleMask: [.titled], backing: .buffered, defer: false)
-            window.title = "AimDrop — test ikony"
+            window.title = windowTitle
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             let heading = NSTextField(labelWithString: "")
@@ -158,7 +160,7 @@ final class PairingState: @unchecked Sendable {
         }
         heading?.stringValue = pin == nil ? "Odbiornik testowy jest aktywny" : "Wpisz ten kod na iPhonie"
         detail?.font = pin == nil ? .systemFont(ofSize: 18, weight: .medium) : .monospacedDigitSystemFont(ofSize: 40, weight: .semibold)
-        detail?.stringValue = pin ?? "AimDrop Logo Test"
+        detail?.stringValue = pin ?? receiverName
         NSApplication.shared.activate(ignoringOtherApps: true)
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
@@ -321,37 +323,58 @@ func serverParameters(state: PairingState, prePair: Bool) throws -> NWParameters
 }
 
 #if !AIRFOLDER_HELPER
-func runServer(loopback: Bool) async throws {
-    let state = try PairingState(loopback: loopback)
+func runServer(loopback: Bool, remoteOnly: Bool = false, backend: ResearchBackend? = nil) async throws {
+    let receiverName = remoteOnly ? "AimDrop AWDL Test" : "AimDrop Logo Test"
+    let state = try PairingState(loopback: loopback,
+        directory: backend?.stateDirectory.appendingPathComponent("Pairing"),
+        artwork: backend == nil ? nil : Bundle.main.url(forResource: "AimDropAvatar", withExtension: "png"), name: receiverName)
     if !loopback || ProcessInfo.processInfo.environment["AIRFOLDER_PAIRING_TEST_FILES"] == "1" {
-        let files = NativeFileService()
+        let files = NativeFileService(port: backend?.port)
         files.identity = state.identity
         try await files.start()
         state.files = files
     }
     guard let authTag = AFProbeAuthTag(state.irk, state.serverID, state.dateAdded) else { throw ProbeError.stage("auth tag") }
-    let txt = NWTXTRecord([
+    let values = [
         "at": authTag.map { String(format: "%02x", $0) }.joined(),
         "sid": state.serverID,
-        "sn": loopback ? "pl.airfolder.protocolprobe" : "com.apple.sharingd.AirDrop",
-        "dnm": "AimDrop Logo Test"
-    ])
+        "sn": loopback || ProcessInfo.processInfo.environment["AIRFOLDER_PROBE_SYNTHETIC_ADVERTISEMENT"] == "1"
+            ? "pl.airfolder.protocolprobe" : "com.apple.sharingd.AirDrop",
+        "dnm": receiverName
+    ]
+    let txt = NWTXTRecord(values)
     var systems: [NWActorSystem] = []
     var actors: [RPPairingDistributedActor] = []
+    var advertisements: [AWDLOnlyAdvertisement.Service] = []
     for (prePair, type) in [(true, "_appSvcPrePair._tcp"), (false, "_applicationServicePairing._tcp")] {
         let service = NWListener.Service(name: "AimDrop-" + state.serverID, type: type, txtRecord: txt)
-        let system = NWActorSystem(service: service, parameters: try serverParameters(state: state, prePair: prePair))
+        let parameters = try serverParameters(state: state, prePair: prePair)
+        let system = remoteOnly ? NWActorSystem(parameters: parameters) : NWActorSystem(service: service, parameters: parameters)
         let actor = RPPairingDistributedActor(state: state, authenticated: !prePair, actorSystem: system)
         try await system.publishAndWaitForReady(actor)
         guard let port = system.listener?.port else { throw ProbeError.unavailable }
         print("\(prePair ? "prepair" : "pairing")_server_ready port=\(port.rawValue)")
         systems.append(system)
         actors.append(actor)
+        advertisements.append(.init(name: "AimDrop-" + state.serverID, type: type, port: port.rawValue, txt: values))
     }
-    print("pairing_prototype_ready scope=\(loopback ? "loopback" : "awdl")")
+    let advertisement = remoteOnly && !loopback
+        ? try AWDLOnlyAdvertisement(services: advertisements, host: "aimdrop-" + state.serverID.lowercased() + ".local.",
+            multicastLoopback: ProcessInfo.processInfo.environment["AIRFOLDER_PROBE_ADVERTISEMENT_LOOPBACK"] == "1",
+            verifyLocally: ProcessInfo.processInfo.environment["AIRFOLDER_PROBE_VERIFY_LOCAL"] == "1") : nil
+    defer { advertisement?.stop() }
+    advertisement?.start()
+    print("pairing_prototype_ready scope=\(loopback ? "loopback" : (remoteOnly ? "external-awdl" : "awdl"))")
     print("paired_identity_count=\(state.store.trustedKeys().count)")
-    if !loopback { DispatchQueue.main.async { PINPanel.show() } }
-    try await Task.sleep(nanoseconds: UInt64(loopback ? 180 : 3600) * 1_000_000_000)
+    if !loopback && ProcessInfo.processInfo.environment["AIRFOLDER_PROBE_HIDE_PANEL"] != "1" {
+        await MainActor.run {
+            PINPanel.receiverName = receiverName
+            if remoteOnly { PINPanel.windowTitle = "AimDrop — test widoczności" }
+            PINPanel.show()
+        }
+    }
+    let duration = Int(ProcessInfo.processInfo.environment["AIRFOLDER_PROBE_DURATION_SECONDS"] ?? "") ?? (loopback ? 180 : 3600)
+    try await Task.sleep(nanoseconds: UInt64(max(5, min(duration, 3600))) * 1_000_000_000)
     for (system, actor) in zip(systems, actors) {
         system.invalidateActor(actor)
         system.listener?.cancel()
@@ -493,16 +516,24 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
             }
             dispatchMain()
         }
-        guard args == ["--loopback"] || args == ["--advertise"] else {
-            print("Usage: pairing-prototype --loopback|--advertise")
+        let remoteOnly = args.contains("--remote-only")
+        let mode = args.filter { $0 != "--remote-only" }
+        guard (mode == ["--loopback"] || mode == ["--advertise"]), args.count == (remoteOnly ? 2 : 1) else {
+            print("Usage: pairing-prototype --loopback|--advertise [--remote-only]")
             exit(2)
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let loopback = args == ["--loopback"]
+        let loopback = mode == ["--loopback"]
         DispatchQueue.global().asyncAfter(deadline: .now() + (loopback ? 185 : 3605)) { exit(8) }
         Task {
-            do { try await runServer(loopback: loopback); exit(0) }
+            do {
+                let backend = remoteOnly && Bundle.main.object(forInfoDictionaryKey: "AimDropResearchProject") != nil
+                    ? try ResearchBackend() : nil
+                defer { backend?.stop() }
+                try await runServer(loopback: loopback, remoteOnly: remoteOnly, backend: backend)
+                exit(0)
+            }
             catch { print("pairing_prototype_error=\(error)"); exit(1) }
         }
         app.run()

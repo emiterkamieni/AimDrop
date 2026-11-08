@@ -47,7 +47,7 @@ From the repository root:
 python3 scripts/package.py --prepare-runtime
 
 # Build, sign, verify, and archive the app. Use its current source version.
-python3 scripts/package.py --version 0.8.4
+python3 scripts/package.py --version 0.8.5
 ```
 
 `--version` is an assertion against `CFBundleShortVersionString`; it does not
@@ -56,7 +56,7 @@ Outputs are:
 
 ```text
 dist/AimDrop.app
-dist/AimDrop-0.8.4-macos-arm64.zip
+dist/AimDrop-0.8.5-macos-arm64.zip
 dist/SHA256SUMS
 ```
 
@@ -104,7 +104,7 @@ Increment both the displayed release version and the monotonic build number in
 `scripts/build.py`. To build and sign a release:
 
 ```sh
-python3 -B scripts/prepare-update.py --version 0.8.4 --notes docs/releases/0.8.4.md
+python3 -B scripts/prepare-update.py --version 0.8.5 --notes docs/releases/0.8.5.md
 # Optional: --notes release-notes.md --previous-appcast previous-appcast.xml
 # After packaging separately: add --existing-build
 # To keep the current dist/AimDrop.app running: add --archive-only
@@ -132,7 +132,8 @@ then publish all assets together. The app's stable feed URL is
 The archive URLs point to specific release tags, not mutable latest ZIPs.
 Version 0.8.4 (build 24) is the first public updater-bearing release. Public
 0.8.2 and earlier clients must install it manually once. The local 0.8.3 build
-(build 23) can install 0.8.4 through its existing updater using the same public key.
+(build 23) can install 0.8.4 or later through its existing updater using the same public key.
+Version 0.8.5 uses build 25 and can update both 0.8.3 and 0.8.4 in the app.
 
 Run `python3 -B scripts/check-update-experiment.py` for an actual two-version
 update using an isolated full bundle under `dist/update-experiment`, a local

@@ -28,6 +28,43 @@ Busy transfers may be absent from `list_ready()`, so snapshots merge rather than
 implicitly deleting active rows. The historical latest-received index remains
 readable for compatibility but no longer restricts the menu.
 
+## Remote discovery and recovery
+
+In 0.8.5, only the two AirDrop pairing service registrations are replaced by
+external mDNS advertisements scoped to Apple's AWDL Wi-Fi interface. These
+advertisements reach remote devices without registering the receiver in the
+Mac's local Bonjour service registry, keeping AimDrop out of its own Mac's system
+AirDrop. The internal HTTP3 broker retains its existing registration and transport
+path.
+
+`MDNSAnnouncement` encodes complete PTR/SRV/TXT/AAAA chains with a six-second
+TTL. Long UTF-8 names are split into complete service chains within the IPv6
+minimum-MTU payload budget. `AWDLAdvertisement` sends them once per second
+through an AWDL-bound, connected UDP socket with multicast loopback disabled.
+Connecting the sender to the multicast destination avoids consuming peers'
+unicast DNS questions intended for the system responder. The publisher does
+not parse incoming DNS traffic.
+
+Each publisher owns its last advertised snapshot for goodbye records. A serial
+lifecycle reconciles addresses, recreates failed sockets with bounded backoff,
+and becomes terminal on stop. The helper refreshes authentication TXT hourly
+and after a detected wake; refreshing never adds a local Bonjour registration.
+Discovery status is forwarded separately from worker readiness, so discovery
+recovery does not gate inbox access or the update-drain protocol.
+
+Discovery recovery handles a missing AWDL interface, AWDL address changes and
+advertisement-send failures, and refreshes visibility after system wake. The UI
+shows **Waiting for Wi-Fi…** while AWDL is unavailable and **Restoring receiver
+visibility…** during recovery. Discovery availability is independent of access to
+the persistent inbox: listing, saving and moving already-received batches to
+Trash remain usable while the receiver is undiscoverable.
+
+Rebuilding advertisements reuses the stored receiver identity. The 0.8.5 upgrade
+preserves pairing, name, avatar, preferences and inbox data; changing the discovery
+mechanism alone does not rotate pairing or require a new PIN. See the
+[release validation status](releases/0.8.5.md#validation-status) for the current
+scope of physical-device evidence.
+
 ## Inbox retention and Trash
 
 Each receipt stores its receive time, retention start, number of days and absolute
@@ -125,5 +162,5 @@ without removing transfer reminders, and invalidates late delivery acknowledgeme
 The bundle identifier, historical Application Support directory, preference key
 and avatar fingerprint namespace remain stable across product renames. A real
 receiver-profile change rotates the complete pairing identity once; unchanged
-profiles survive restarts. Historical implementation and device-test details are
-under `docs/research/`.
+profiles survive restarts and the 0.8.5 upgrade. Historical implementation and
+device-test details are under `docs/research/`.

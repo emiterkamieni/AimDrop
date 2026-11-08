@@ -44,6 +44,7 @@ actor NativeReceiverHost {
     let events: HelperEvents
     let defaultAvatar: ReceiverAvatar
     var systems: [(NWActorSystem, RPPairingDistributedActor, String)] = []
+    private var advertisement: AWDLAdvertisement?
     init(options: [String: String], events: HelperEvents) throws {
         guard let path = options["state-dir"], path.hasPrefix("/"),
               let artwork = options["artwork"], artwork.hasPrefix("/"),
@@ -59,12 +60,21 @@ actor NativeReceiverHost {
         state.files = NativeFileService(port: port)
         state.files?.identity = state.identity
     }
-    private func service(type: String) throws -> NWListener.Service {
+    private func serviceValues() throws -> [String: String] {
         guard let tag = AFProbeAuthTag(state.irk, state.serverID, state.dateAdded) else { throw ProbeError.unavailable }
-        let txt = NWTXTRecord(["at": tag.map { String(format: "%02x", $0) }.joined(),
+        return ["at": tag.map { String(format: "%02x", $0) }.joined(),
             "sid": state.serverID, "sn": state.loopback ? "pl.airfolder.protocolprobe" : "com.apple.sharingd.AirDrop",
-            "dnm": state.receiverName])
-        return NWListener.Service(name: "AimDrop-" + state.serverID, type: type, txtRecord: txt)
+            "dnm": state.receiverName]
+    }
+    private func service(type: String) throws -> NWListener.Service {
+        NWListener.Service(name: "AimDrop-" + state.serverID, type: type, txtRecord: NWTXTRecord(try serviceValues()))
+    }
+    private func announcement() throws -> MDNSAnnouncement {
+        let services = try systems.map { system, _, type -> MDNSAnnouncement.Service in
+            guard let port = system.listener?.port else { throw ProbeError.unavailable }
+            return .init(type: type, port: port.rawValue)
+        }
+        return try MDNSAnnouncement(serverID: state.serverID, txt: serviceValues(), services: services)
     }
     func start() async throws {
         try await state.files?.start()
@@ -76,7 +86,9 @@ actor NativeReceiverHost {
     }
     private func publishPairingActors() async throws {
         for (prePair, type) in [(true, "_appSvcPrePair._tcp"), (false, "_applicationServicePairing._tcp")] {
-            let system = NWActorSystem(service: try service(type: type), parameters: try serverParameters(state: state, prePair: prePair))
+            let parameters = try serverParameters(state: state, prePair: prePair)
+            let system = state.loopback ? NWActorSystem(service: try service(type: type), parameters: parameters)
+                : NWActorSystem(parameters: parameters)
             let actor = RPPairingDistributedActor(state: state, authenticated: !prePair, actorSystem: system)
             systems.append((system, actor, type))
             try await system.publishAndWaitForReady(actor)
@@ -87,6 +99,8 @@ actor NativeReceiverHost {
                 if case .failed = status { events.fatal() }
             }
         }
+        if state.loopback { events.send("discovery_status", ["status": "advertising"]) }
+        else { try refreshAdvertisement() }
     }
     func endpointPorts() -> [String: Any] {
         var ports: [String: Any] = [:]
@@ -98,11 +112,31 @@ actor NativeReceiverHost {
         return ports
     }
     private func stopPairingActors() {
+        advertisement?.stop(); advertisement = nil
         for (system, actor, _) in systems { system.invalidateActor(actor); system.listener?.cancel() }
         systems.removeAll()
     }
     func refreshAdvertisement() throws {
-        for (system, _, type) in systems { system.listener?.service = try service(type: type) }
+        guard systems.count == 2 else { return } // A profile replacement may be awaiting a listener.
+        if state.loopback {
+            for (system, _, type) in systems { system.listener?.service = try service(type: type) }
+        } else {
+            do {
+                let snapshot = try announcement()
+                if let advertisement { advertisement.replace(snapshot) }
+                else {
+                    let publisher = AWDLAdvertisement(snapshot: snapshot) { [events] status in
+                        events.send("discovery_status", ["status": status.rawValue])
+                    }
+                    advertisement = publisher
+                    publisher.start()
+                }
+            } catch {
+                advertisement?.stop(); advertisement = nil
+                events.send("discovery_status", ["status": "retrying"])
+                throw error
+            }
+        }
     }
     func updateProfile(_ name: String, avatar: ReceiverAvatar? = nil) async throws -> Bool {
         let changed = try state.updatePresentation(name: helperName(name), avatar: avatar)
@@ -150,9 +184,11 @@ actor NativeReceiverHost {
                           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
                     continuation.yield(value)
                 }
-                // Covers parent death even while listener startup is awaiting
-                // the system broker. The OS tears down the helper's listeners.
-                exit(0)
+                // Give the established host a chance to send goodbye records.
+                // The bound still covers parent death during broker startup.
+                continuation.yield(["command": "shutdown"])
+                continuation.finish()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { exit(0) }
             }
         }
         Task {
@@ -160,9 +196,22 @@ actor NativeReceiverHost {
                 let host = try NativeReceiverHost(options: options, events: events)
                 try await host.start()
                 let refresh = Task {
+                    var previous = AWDLAdvertisement.continuousTime
+                    var nextRefresh = previous + 3600
                     while !Task.isCancelled {
-                        try await Task.sleep(nanoseconds: 3600 * 1_000_000_000)
-                        try await host.refreshAdvertisement()
+                        do { try await Task.sleep(nanoseconds: 5 * 1_000_000_000) }
+                        catch { return }
+                        let now = AWDLAdvertisement.continuousTime
+                        let woke = now - previous > 10
+                        previous = now
+                        guard woke || now >= nextRefresh else { continue }
+                        do {
+                            try await host.refreshAdvertisement()
+                            nextRefresh = now + 3600
+                        } catch {
+                            print("native_advertisement_refresh_failed")
+                            nextRefresh = now + 5
+                        }
                     }
                 }
                 for await command in commands {
