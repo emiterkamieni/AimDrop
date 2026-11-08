@@ -331,7 +331,7 @@ w Finderze. Nie są to wpisy skrzynki uruchomionej aplikacji `/Applications/AimD
 
 Przeszły: 132 testy Pythona, `check-awdl-advertisement.py`, `native-smoke.py`,
 `check-native-update.py` oraz kontrole `DiscoveryStatusChecks`, `LocalizationChecks`,
-`PendingTransfersChecks` i `UpdateChecks`. Finalne pakowanie po zmianie nagłówka
+`PendingTransfersChecks` i `UpdateChecks`. Pakowanie po aktualizacji
 LICENSE potwierdziło identyczne bajty testowanego helpera, workera i awatara.
 
 ## Pozostałe próby fizyczne
