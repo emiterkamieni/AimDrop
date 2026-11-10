@@ -15,13 +15,9 @@ discards a transfer.
  · [Releases](https://github.com/emiterkamieni/AimDrop/releases)
  · [Report an issue](https://github.com/emiterkamieni/AimDrop/issues)
 
-**Latest release: [0.8.5](https://github.com/emiterkamieni/AimDrop/releases/tag/v0.8.5) (build 25)**
-— automatic hiding from the receiver Mac's own AirDrop, remote discovery over
-AWDL and automatic visibility recovery. See [what changed](docs/releases/0.8.5.md).
-
-**Current source build: 0.8.6 (build 26)** — fixes Mac pairing with larger native
-contact photos and keeps the PIN window aligned with the code's expiry.
-See the [pending release notes](docs/releases/0.8.6.md).
+**Latest release: [0.8.6](https://github.com/emiterkamieni/AimDrop/releases/tag/v0.8.6) (build 26)**
+— fixes Mac pairing with larger native contact photos and keeps the PIN window
+aligned with the code's expiry. See [what changed](docs/releases/0.8.6.md).
 
 ## Features
 
@@ -49,8 +45,8 @@ See the [pending release notes](docs/releases/0.8.6.md).
 
 Device interoperability has been verified with an iPhone running **iOS 26.6.1**
 and a receiving Mac running **macOS 26.5.2**.
-See the [0.8.5 validation status](docs/releases/0.8.5.md#validation-status) for the
-scope of device testing of the new discovery implementation.
+See the [0.8.6 validation status](docs/releases/0.8.6.md#validation-status) for the
+scope of pairing and device testing.
 
 Release ZIPs include their own Python runtime. Python, Homebrew and developer
 tools are needed only when building from source.
@@ -135,7 +131,7 @@ the latest release once using the [installation steps](#install). **0.8.4 was th
 first public release with the built-in installer**; subsequent releases can be
 installed from the app.
 
-Upgrading to **0.8.5 (build 25)** preserves stored pairing, receiver name, avatar,
+Upgrading to **0.8.6 (build 26)** preserves stored pairing, receiver name, avatar,
 settings and inbox files. The upgrade alone does not require a new PIN; changing
 the receiver name or avatar still does.
 
@@ -190,11 +186,11 @@ To prepare a release that can also be installed through AimDrop, sign the final
 ZIP and update feed using the release publisher's Keychain key:
 
 ```sh
-python3 -B scripts/prepare-update.py --version 0.8.5 --notes docs/releases/0.8.5.md
+python3 -B scripts/prepare-update.py --version 0.8.6 --notes docs/releases/0.8.6.md
 ```
 
 Upload **all three** outputs from `dist` to the same GitHub release:
-`AimDrop-0.8.5-macos-arm64.zip`, `appcast.xml`, and `SHA256SUMS`. Publish them
+`AimDrop-0.8.6-macos-arm64.zip`, `appcast.xml`, and `SHA256SUMS`. Publish them
 together and mark the release as **Latest**, so the stable update-feed URL points
 to it. Both the version and build number must increase for future releases.
 Use `--archive-only` when preparing a newer release while the current

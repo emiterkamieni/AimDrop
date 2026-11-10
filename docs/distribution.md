@@ -104,7 +104,7 @@ Increment both the displayed release version and the monotonic build number in
 `scripts/build.py`. To build and sign a release:
 
 ```sh
-python3 -B scripts/prepare-update.py --version 0.8.5 --notes docs/releases/0.8.5.md
+python3 -B scripts/prepare-update.py --version 0.8.6 --notes docs/releases/0.8.6.md
 # Optional: --notes release-notes.md --previous-appcast previous-appcast.xml
 # After packaging separately: add --existing-build
 # To keep the current dist/AimDrop.app running: add --archive-only
@@ -133,7 +133,7 @@ The archive URLs point to specific release tags, not mutable latest ZIPs.
 Version 0.8.4 (build 24) is the first public updater-bearing release. Public
 0.8.2 and earlier clients must install it manually once. The local 0.8.3 build
 (build 23) can install 0.8.4 or later through its existing updater using the same public key.
-Version 0.8.5 uses build 25 and can update both 0.8.3 and 0.8.4 in the app.
+Version 0.8.6 uses build 26 and can update 0.8.3, 0.8.4 and 0.8.5 in the app.
 
 Run `python3 -B scripts/check-update-experiment.py` for an actual two-version
 update using an isolated full bundle under `dist/update-experiment`, a local
