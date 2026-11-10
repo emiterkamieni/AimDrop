@@ -402,7 +402,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         switch event["event"] as? String {
         case "pairing_pin":
-            if let code = event["code"] as? String { pairingWindow.show(code: code) }
+            if let code = event["code"] as? String, let expiresAt = event["expires_at"] as? TimeInterval {
+                pairingWindow.show(code: code, expiresAt: Date(timeIntervalSince1970: expiresAt))
+            }
         case "pairing_closed":
             pairingWindow.close()
         case "discovery_status":
@@ -1234,6 +1236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var updateItemForChecks: NSMenuItem { updateItem }
     func showAboutForChecks() -> NSWindow? { showAbout(); return aboutWindow }
     func closeForChecks() {
+        pairingWindow.close()
         sparkleUpdater.cancelPreparation = nil
         sparkleUpdater.dismissUpdateInstallation()
         pendingMenu.hidePreview()

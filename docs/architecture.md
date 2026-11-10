@@ -15,6 +15,18 @@ files live in `scripts/research/` and are compiled into `AimDropReceiver` with
 module name `rapportd`, which is part of the wire contract. The research folder
 therefore contains production sources as well as standalone protocol probes.
 
+PIN events carry the credential's absolute expiry time through both IPC hops.
+Retries reuse a still-valid PIN and its original deadline; the AppKit panel
+closes silently at that deadline, including during menu tracking or after wake.
+Expired events never reopen the panel. A new pre-pair request after expiry
+generates a different PIN with a fresh 120-second lifetime.
+
+Peer enrollment validates and persists only identifiers, public keys, IRKs and
+dates. Incoming native contact photos are ignored; their size is independent
+of the app's 512 KiB limit for its own generated receiver avatar. Applying that
+outgoing-image limit to incoming identities can reject valid macOS pairing
+after successful PIN authentication.
+
 The Python worker validates and unpacks transfers into the app-owned inbox.
 Only complete receipts are offered for saving. Saving copies files to a staging
 directory on the destination volume, then publishes each item without overwriting

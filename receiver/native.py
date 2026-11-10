@@ -1,6 +1,7 @@
 """Own the bundled native transport; preserve the worker's existing IPC contract."""
 import json
 import logging
+import math
 import subprocess
 import threading
 import time
@@ -62,8 +63,10 @@ class NativeReceiver:
                             pending[0].set()
                 elif event == "pin":
                     code = value.get("code")
-                    if isinstance(code, str) and len(code) == 6 and code.isascii() and code.isdigit():
-                        self.emit("pairing_pin", code=code)
+                    expires_at = value.get("expires_at")
+                    if (isinstance(code, str) and len(code) == 6 and code.isascii() and code.isdigit()
+                            and type(expires_at) in (int, float) and math.isfinite(expires_at)):
+                        self.emit("pairing_pin", code=code, expires_at=expires_at)
                 elif event == "quiesced":
                     with self.lock:
                         if value.get("request_id") == self.quiesce_request:

@@ -9,7 +9,7 @@ import subprocess
 import sparkle
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKS = ["LocalizationChecks", "DiscoveryStatusChecks", "UpdateChecks", "NotificationChecks", "WindowPlacementChecks", "AvatarChecks", "SettingsChecks", "LoginItemChecks",
+CHECKS = ["LocalizationChecks", "DiscoveryStatusChecks", "PairingWindowChecks", "UpdateChecks", "NotificationChecks", "WindowPlacementChecks", "AvatarChecks", "SettingsChecks", "LoginItemChecks",
           "PendingTransfersChecks", "PendingFilePreviewChecks", "RetentionSettingsChecks", "SettingsLanguageChecks", "ProgressModel", "ProgressResponsiveness", "ProgressPreview"]
 
 

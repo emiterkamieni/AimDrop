@@ -2,6 +2,46 @@ import Foundation
 import CryptoKit
 import Network
 
+/// Receiver limits apply to stored credentials, not unused native contact photos.
+func checkPeerEnrollment() throws {
+    let store = try PairingStore(directory: nil, name: "Peer fixture", avatarDigest: String(repeating: "0", count: 64))
+    func identity(imageBytes: Int) -> RPPairingTemporaryIdentity {
+        RPPairingTemporaryIdentity(contactImageData: Data(repeating: 0xa5, count: imageBytes), dateAdded: Date(),
+            deviceName: "Synthetic Mac", identifier: UUID().uuidString, givenName: "Fixture", familyName: "",
+            deviceIRKData: Data(repeating: 1, count: 16), devicePublicKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation)
+    }
+    let nativeSized = identity(imageBytes: 551_006)
+    let larger = identity(imageBytes: 2 * 1024 * 1024)
+    try store.enroll([nativeSized, larger])
+    precondition(Set(store.trustedKeys()) == Set([nativeSized.devicePublicKey, larger.devicePublicKey]))
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let before = try encoder.encode(store.snapshot())
+    precondition(before.count < 16_384, "Peer photos must not enter persistent pairing storage")
+
+    func reject(_ identities: [RPPairingTemporaryIdentity]) throws {
+        var rejected = false
+        do { try store.enroll(identities) } catch ProbeError.invalidArgument { rejected = true }
+        precondition(rejected, "Malformed credentials must still be rejected")
+        let after = try encoder.encode(store.snapshot())
+        precondition(after == before, "Rejected batches must not partially update stored peers")
+    }
+    try reject([])
+    try reject(Array(repeating: nativeSized, count: 17))
+    var invalid = nativeSized
+    invalid.identifier = ""
+    try reject([larger, invalid])
+    invalid = nativeSized; invalid.identifier = String(repeating: "x", count: 257)
+    try reject([invalid])
+    invalid = nativeSized; invalid.deviceIRKData = Data(count: 15)
+    try reject([invalid])
+    invalid = nativeSized; invalid.devicePublicKey = Data(count: 31)
+    try reject([invalid])
+    invalid = nativeSized; invalid.dateAdded = Date(timeIntervalSinceReferenceDate: .nan)
+    try reject([invalid])
+    print("peer_enrollment_large_contact_photo=ok credential_validation_and_atomicity=ok")
+}
+
 /// Cross-process fixture: the server and client have separate persistent stores.
 /// Uses the real pre-pair actor, native handshake and native QUIC endpoint.
 func checkPairVerifyReconnect(port: UInt16, mode: String) async throws {

@@ -59,7 +59,7 @@ class Worker:
             except queue.Empty:
                 raise AssertionError('Worker timeout: ' + self.log_path.read_text()[-1500:])
             if value['event'] == 'error' and not allow_error:
-                raise AssertionError(value)
+                raise AssertionError(str(value) + '\n' + self.log_path.read_text()[-5000:])
             if value['event'] == kind:
                 if kind == 'ready':
                     self.native_pid = value['native']['pid']
@@ -112,11 +112,14 @@ def main():
                 assert 'bundled_pair_verify_transfer=ok' in result.stdout
         try:
             ready = worker.event('ready')
-            def enroll():
-                client = subprocess.Popen([str(prototype), '--client', str(ready['native']['prepair_port']), str(ready['native']['pairing_port'])],
+            def enroll(large_peer_image=False):
+                extra = ['--large-peer-image'] if large_peer_image else []
+                client = subprocess.Popen([str(prototype), '--client', str(ready['native']['prepair_port']), str(ready['native']['pairing_port']), *extra],
                                           cwd=ROOT, env=client_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
-                    pin = worker.event('pairing_pin')['code']
+                    event = worker.event('pairing_pin')
+                    pin = event['code']
+                    assert 0 < event['expires_at'] - time.time() <= 120, 'Missing or invalid credential deadline'
                     stdout, stderr = client.communicate(pin + '\n', timeout=20)
                     assert client.returncode == 0, (stdout, stderr)
                     worker.event('pairing_closed')
@@ -125,8 +128,10 @@ def main():
                 finally:
                     if client.poll() is None:
                         client.kill(); client.wait()
-            first_pin = enroll()
+            first_pin = enroll(large_peer_image=True)
+            reconnect(ready)
             state_path = root / 'state/Pairing/identity.json'
+            assert state_path.stat().st_size < 16384, 'Unused peer contact photo persisted in pairing storage'
             # v3 had no avatar fingerprint; v4 recorded the old AirFolder logo.
             # Both must rotate once when the bundled artwork becomes AimDrop.
             v4 = json.loads(state_path.read_bytes())
@@ -272,7 +277,7 @@ def main():
             worker.close()
             worker = Worker(bundle, root, name)
             worker.close()  # UI EOF during native startup
-            print('PASS: bundled profile IPC, v3/v4 logo migration with one-time pairing reset, name/avatar reset + exact PNG donation, metadata/path equality, custom-avatar restart, invalid PNG rejection without key changes, logo restore, PairVerify + h3/SHA-256, durable backlog, child lifecycle')
+            print('PASS: native-sized peer contact photo, bundled profile IPC, v3/v4 logo migration with one-time pairing reset, name/avatar reset + exact PNG donation, metadata/path equality, custom-avatar restart, invalid PNG rejection without key changes, logo restore, PairVerify + h3/SHA-256, durable backlog, child lifecycle')
         finally:
             worker.close()
 

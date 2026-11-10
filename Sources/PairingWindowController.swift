@@ -4,14 +4,21 @@ import Cocoa
 final class PairingWindowController: NSObject {
     private var window: NSPanel?
     private var expiry: Timer?
+    private var expiresAt: Date?
     private var heading: NSTextField?
     private var detail: NSTextField?
 
     override init() {
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(refreshLocalization), name: L10n.didChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshExpiry), name: .NSSystemClockDidChange, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refreshExpiry), name: NSWorkspace.didWakeNotification, object: nil)
     }
-    deinit { expiry?.invalidate(); NotificationCenter.default.removeObserver(self) }
+    deinit {
+        expiry?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
 
     @objc func refreshLocalization() {
         window?.title = L10n.text("AimDrop — pairing", "AimDrop — parowanie")
@@ -19,8 +26,10 @@ final class PairingWindowController: NSObject {
         detail?.stringValue = L10n.text("Pairing will be remembered. The code is needed for the first connection or after pairing expires.", "Parowanie zostanie zapamiętane. Kod jest potrzebny przy pierwszym połączeniu lub po wygaśnięciu parowania.")
     }
 
-    func show(code: String) {
-        guard code.count == 6, code.utf8.allSatisfy({ (48...57).contains($0) }) else { return }
+    func show(code: String, expiresAt: Date) {
+        // The credential's original deadline also governs retries and queued IPC.
+        guard code.count == 6, code.utf8.allSatisfy({ (48...57).contains($0) }),
+              expiresAt.timeIntervalSince1970.isFinite, expiresAt > Date() else { return }
         close()
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 236),
                             styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -47,12 +56,24 @@ final class PairingWindowController: NSObject {
         panel.center()
         window = panel
         self.heading = heading; self.detail = detail
+        self.expiresAt = expiresAt
         refreshLocalization()
-        panel.orderFrontRegardless()
-        expiry = Timer.scheduledTimer(withTimeInterval: 120, repeats: false) { [weak self] _ in self?.close() }
+        refreshExpiry()
+        window?.orderFrontRegardless()
+    }
+
+    @objc private func refreshExpiry() {
+        expiry?.invalidate(); expiry = nil
+        guard let expiresAt else { return }
+        guard expiresAt > Date() else { close(); return }
+        let timer = Timer(fire: expiresAt, interval: 0, repeats: false) { [weak self] _ in self?.refreshExpiry() }
+        // Menus and modal UI must not pause PIN expiry.
+        RunLoop.main.add(timer, forMode: .common)
+        expiry = timer
     }
     func close() {
         expiry?.invalidate(); expiry = nil
+        expiresAt = nil
         window?.close(); window = nil
         heading = nil; detail = nil
     }

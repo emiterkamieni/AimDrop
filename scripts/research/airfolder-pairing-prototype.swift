@@ -55,13 +55,13 @@ final class PairingState: @unchecked Sendable {
     private var pin = ""
     private var pinExpires = Date.distantPast
     private var name: String
-    let onPIN: ((String) -> Void)?
+    let onPIN: ((String, Date) -> Void)?
     let onPaired: (() -> Void)?
     var credentials: [String: (sec_identity_t, Date)] = [:]
     var files: NativeFileService?
 
     init(loopback: Bool, directory: URL? = nil, artwork: URL? = nil, customAvatar: URL? = nil, expectedAvatarDigest: String? = nil,
-         name: String = "AimDrop Logo Test", onPIN: ((String) -> Void)? = nil,
+         name: String = "AimDrop Logo Test", onPIN: ((String, Date) -> Void)? = nil,
          onPaired: (() -> Void)? = nil) throws {
         self.loopback = loopback
         self.name = name; self.onPIN = onPIN; self.onPaired = onPaired
@@ -78,24 +78,26 @@ final class PairingState: @unchecked Sendable {
     func register(client: String) throws -> String {
         guard !client.isEmpty, client.utf8.count <= 256 else { throw ProbeError.invalidArgument }
         lock.lock()
-        credentials = credentials.filter { $0.value.1 > Date() }
+        let now = Date()
+        credentials = credentials.filter { $0.value.1 > now }
         guard credentials.count < 16 else { lock.unlock(); throw ProbeError.forbidden }
-        if pinExpires <= Date() {
+        if pinExpires <= now {
             let previous = pin
             repeat { pin = String(format: "%06d", Int.random(in: 0..<1_000_000)) } while pin == previous
-            pinExpires = Date().addingTimeInterval(120)
+            pinExpires = now.addingTimeInterval(120)
         }
         let code = pin
+        let expiresAt = pinExpires
         let server = UUID().uuidString
         guard let credential = AFCreateSPAKEIdentity(pakeContext, client, server, code, true) else { lock.unlock(); throw ProbeError.unavailable }
-        credentials[client + ":" + server] = (credential, pinExpires)
+        credentials[client + ":" + server] = (credential, expiresAt)
         lock.unlock()
         print("prepair_exchange=ready")
         #if !AIRFOLDER_HELPER
         if loopback { print("test_pin=\(code)") }
         else { DispatchQueue.main.async { PINPanel.show(pin: code) } }
         #endif
-        onPIN?(code)
+        onPIN?(code, expiresAt)
         return server
     }
 
@@ -381,7 +383,7 @@ func runServer(loopback: Bool, remoteOnly: Bool = false, backend: ResearchBacken
     }
 }
 
-func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async throws {
+func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool, largePeerImage: Bool = false) async throws {
     let tls = NWProtocolTLS.Options()
     // This discovery connection carries PAKE identifiers, not authenticated identities.
     // Rapport accepts the self-signed pre-pair certificate in the same way.
@@ -425,7 +427,10 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
           identity.contactImageData == expectedImage else { throw ProbeError.unavailable }
     try own.store.enroll(identities!)
     print("dynamic_pake_logo_exchange=ok bytes=\(own.image.count)")
-    try await peer.shareTemporaryIdentities([own.identity])
+    var outgoing = own.identity
+    // Match the size observed in a native macOS contact without copying its photo.
+    if largePeerImage { outgoing.contactImageData = Data(repeating: 0xa5, count: 551_006) }
+    try await peer.shareTemporaryIdentities([outgoing])
     print("temporary_identity_exchange=mutual")
 }
 
@@ -433,6 +438,10 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
     static func main() {
         setbuf(stdout, nil)
         let args = Array(CommandLine.arguments.dropFirst())
+        if args == ["--peer-enrollment-check"] {
+            do { try checkPeerEnrollment(); exit(0) }
+            catch { print("peer_enrollment_check_error=\(error)"); exit(1) }
+        }
         if args == ["--pairing-store-check"] {
             do { _ = try PairingState(loopback: true); print("pairing_store_check=ok"); exit(0) }
             catch { print("pairing_store_check_error=\(error)"); exit(1) }
@@ -511,7 +520,7 @@ func runClient(prePairPort: UInt16, pairingPort: UInt16, wrongPIN: Bool) async t
         if args.first == "--client", args.count >= 3, let pre = UInt16(args[1]), let pair = UInt16(args[2]) {
             DispatchQueue.global().asyncAfter(deadline: .now() + 12) { exit(8) }
             Task {
-                do { try await runClient(prePairPort: pre, pairingPort: pair, wrongPIN: args.contains("--wrong-pin")); exit(0) }
+                do { try await runClient(prePairPort: pre, pairingPort: pair, wrongPIN: args.contains("--wrong-pin"), largePeerImage: args.contains("--large-peer-image")); exit(0) }
                 catch { print("pairing_client_error=\(error)"); exit(1) }
             }
             dispatchMain()

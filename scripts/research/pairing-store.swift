@@ -117,10 +117,11 @@ final class PairingStore: @unchecked Sendable {
         // Rapport's default donation lifetime is 30 calendar days
         // (rapportd:0x10011ca04). A new PIN enrollment renews it.
         guard let expiry = Calendar.current.date(byAdding: .day, value: 30, to: now) else { throw ProbeError.unavailable }
+        // Only persist peer credentials. Native contact photos can exceed our
+        // outgoing 256px avatar limit; they are neither rendered nor stored here.
         let additions = try identities.map { identity -> Peer in
             guard !identity.identifier.isEmpty, identity.identifier.utf8.count <= 256,
                   identity.deviceIRKData.count == 16, identity.devicePublicKey.count == 32,
-                  (identity.contactImageData?.count ?? 0) <= ReceiverAvatar.maximumPNGBytes,
                   identity.dateAdded.timeIntervalSinceReferenceDate.isFinite else { throw ProbeError.invalidArgument }
             _ = try Curve25519.Signing.PublicKey(rawRepresentation: identity.devicePublicKey)
             return Peer(identifier: identity.identifier, publicKey: identity.devicePublicKey,

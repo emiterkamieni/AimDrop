@@ -55,7 +55,9 @@ actor NativeReceiverHost {
         state = try PairingState(loopback: options["loopback"] == "true",
             directory: URL(fileURLWithPath: path, isDirectory: true), artwork: URL(fileURLWithPath: artwork),
             customAvatar: options["avatar"].map { URL(fileURLWithPath: $0) }, expectedAvatarDigest: options["avatar-digest"],
-            name: helperName(name), onPIN: { code in events.send("pin", ["code": code]) },
+            name: helperName(name), onPIN: { code, expiresAt in
+                events.send("pin", ["code": code, "expires_at": expiresAt.timeIntervalSince1970])
+            },
             onPaired: { events.send("pin_closed") })
         state.files = NativeFileService(port: port)
         state.files?.identity = state.identity

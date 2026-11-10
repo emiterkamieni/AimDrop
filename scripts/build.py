@@ -104,8 +104,8 @@ def main():
             "CFBundleExecutable": "AimDrop",
             "CFBundleIconFile": "AimDrop.icns",
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": experiment["version"] if experiment else "0.8.5",
-            "CFBundleVersion": experiment["build"] if experiment else "25",
+            "CFBundleShortVersionString": experiment["version"] if experiment else "0.8.6",
+            "CFBundleVersion": experiment["build"] if experiment else "26",
             "SUFeedURL": experiment["feed"] if experiment else "https://github.com/emiterkamieni/AimDrop/releases/latest/download/appcast.xml",
             "SUPublicEDKey": experiment["public_key"] if experiment else "kazbF5Wyx5BVHbPvTPNmovXPBH3xCD+U8+/Bo7A4UkQ=",
             "SUEnableAutomaticChecks": False,
@@ -125,6 +125,8 @@ def main():
             "AFPythonExecutable": "python/bin/python3" if args.bundled_python else str(pathlib.Path(sys.executable).resolve()),
         }, stream)
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
+    # Replacing files inside Contents does not update the bundle date in Finder.
+    app.touch()
     print(app)
 
 

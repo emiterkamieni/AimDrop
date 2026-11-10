@@ -19,6 +19,10 @@ discards a transfer.
 — automatic hiding from the receiver Mac's own AirDrop, remote discovery over
 AWDL and automatic visibility recovery. See [what changed](docs/releases/0.8.5.md).
 
+**Current source build: 0.8.6 (build 26)** — fixes Mac pairing with larger native
+contact photos and keeps the PIN window aligned with the code's expiry.
+See the [pending release notes](docs/releases/0.8.6.md).
+
 ## Features
 
 - **Visible to your other devices.** AimDrop automatically stays out of its own Mac's system AirDrop.
@@ -208,9 +212,13 @@ python3 scripts/smoke.py --app dist/AimDrop.app
 python3 scripts/research/build-pairing-prototypes.py
 python3 scripts/native-smoke.py --app dist/AimDrop.app
 python3 scripts/check-native-update.py --app dist/AimDrop.app
+
+# Full PIN expiry / late retry / fresh-code check (about two minutes)
+python3 scripts/check-pin-expiry.py --app dist/AimDrop.app
 ```
 
 The Swift UI checks need a logged-in macOS desktop session.
+Run the native integration checks sequentially; they use shared macOS services.
 
 ## Project layout
 

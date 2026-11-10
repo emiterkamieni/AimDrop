@@ -85,10 +85,12 @@ def main():
         second_env = {**common, 'AIRFOLDER_PAIRING_STATE_DIR': str(root / 'second')}
         server = None
         try:
+            print(run(['--peer-enrollment-check'], common).strip())
             print(run(['--pair-verify-check'], common).strip())
             server = Server(server_env)
             for env in (client_env, second_env):
-                client = subprocess.Popen([BINARY, '--client', server.ports['prepair'], server.ports['pairing']], cwd=ROOT,
+                extra = ['--large-peer-image'] if env is client_env else []
+                client = subprocess.Popen([BINARY, '--client', server.ports['prepair'], server.ports['pairing'], *extra], cwd=ROOT,
                                           env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
                     while True:
